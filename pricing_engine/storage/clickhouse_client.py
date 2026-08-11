@@ -1,111 +1,182 @@
+import os
 import json
-from pathlib import Path
 from datetime import datetime
+
+import clickhouse_connect
 
 
 class ClickHouseStorage:
 
     def __init__(self):
 
-        self.output_dir = Path("output")
+        # ---------------------------------------------------
+        # ClickHouse Connection
+        # ---------------------------------------------------
+        #
+        # Railway par environment variables use honge.
+        # Local machine par agar variables nahi hain to
+        # localhost/default values use hongi.
+        #
 
-        self.output_dir.mkdir(exist_ok=True)
-
-        self.storage_file = (
-            self.output_dir / "clickhouse_storage.json"
+        host = os.getenv(
+            "CLICKHOUSE_HOST",
+            "localhost"
         )
 
-    # ---------------------------------------
+        port = int(
+            os.getenv(
+                "CLICKHOUSE_PORT",
+                "8123"
+            )
+        )
+
+        username = os.getenv(
+            "CLICKHOUSE_USER",
+            "default"
+        )
+
+        password = os.getenv(
+            "CLICKHOUSE_PASSWORD",
+            "pricing123"
+        )
+
+        database = os.getenv(
+            "CLICKHOUSE_DATABASE",
+            "pricing"
+        )
+
+        print(
+            f"[ClickHouse] Connecting to {host}:{port}/{database}"
+        )
+
+        self.client = clickhouse_connect.get_client(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            database=database
+        )
+
+        print(
+            "[ClickHouse] Connected"
+        )
+
+        self.create_table()
+
+    # ---------------------------------------------------
+    # Create Products Table
+    # ---------------------------------------------------
+
+    def create_table(self):
+
+        self.client.command("""
+            CREATE TABLE IF NOT EXISTS products
+            (
+                title String,
+                url String,
+                price Float64,
+                source String,
+                currency String,
+                network String,
+                timestamp String,
+                stored_at String
+            )
+            ENGINE = MergeTree()
+            ORDER BY stored_at
+        """)
+
+        print(
+            "[ClickHouse] Products table ready"
+        )
+
+    # ---------------------------------------------------
     # Insert Record
-    # ---------------------------------------
+    # ---------------------------------------------------
 
     def insert(self, data):
 
-        records = []
-
-        if self.storage_file.exists():
-
-            try:
-
-                with open(
-                    self.storage_file,
-                    "r",
-                    encoding="utf-8",
-                ) as f:
-
-                    records = json.load(f)
-
-            except Exception:
-
-                records = []
-
-        data["stored_at"] = (
+        record = [
+            data.get("title", ""),
+            data.get("url", ""),
+            float(data.get("price", 0)),
+            data.get("source", ""),
+            data.get("currency", "USD"),
+            json.dumps(
+                data.get("network", [])
+            ),
+            data.get("timestamp", ""),
             datetime.utcnow().isoformat()
+        ]
+
+        self.client.insert(
+            "products",
+            [record],
+            column_names=[
+                "title",
+                "url",
+                "price",
+                "source",
+                "currency",
+                "network",
+                "timestamp",
+                "stored_at"
+            ]
         )
-
-        records.append(data)
-
-        with open(
-            self.storage_file,
-            "w",
-            encoding="utf-8",
-        ) as f:
-
-            json.dump(
-                records,
-                f,
-                indent=4,
-                ensure_ascii=False,
-            )
 
         print(
-            f"[ClickHouse] Stored : {data['title']}"
+            f"[ClickHouse] Stored: "
+            f"{data.get('title', '')}"
         )
 
-    # ---------------------------------------
-    # Read All Records
-    # ---------------------------------------
+    # ---------------------------------------------------
+    # Get All Records
+    # ---------------------------------------------------
 
     def get_all(self):
 
-        if not self.storage_file.exists():
+        result = self.client.query("""
+            SELECT
+                title,
+                url,
+                price,
+                source,
+                currency,
+                network,
+                timestamp,
+                stored_at
+            FROM products
+            ORDER BY stored_at
+        """)
 
-            return []
+        columns = result.column_names
 
-        try:
+        return [
+            dict(zip(columns, row))
+            for row in result.result_rows
+        ]
 
-            with open(
-                self.storage_file,
-                "r",
-                encoding="utf-8",
-            ) as f:
-
-                return json.load(f)
-
-        except Exception:
-
-            return []
-
-    # ---------------------------------------
+    # ---------------------------------------------------
     # Count
-    # ---------------------------------------
+    # ---------------------------------------------------
 
     def count(self):
 
-        return len(self.get_all())
+        result = self.client.query(
+            "SELECT count() FROM products"
+        )
 
-    # ---------------------------------------
+        return result.result_rows[0][0]
+
+    # ---------------------------------------------------
     # Clear Storage
-    # ---------------------------------------
+    # ---------------------------------------------------
 
     def clear(self):
 
-        with open(
-            self.storage_file,
-            "w",
-            encoding="utf-8",
-        ) as f:
+        self.client.command(
+            "TRUNCATE TABLE products"
+        )
 
-            json.dump([], f)
-
-        print("[ClickHouse] Storage Cleared")
+        print(
+            "[ClickHouse] Storage Cleared"
+        )
