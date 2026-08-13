@@ -1,58 +1,27 @@
-import subprocess
-import time
-import webbrowser
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-print("=" * 70)
-print("Pricing Intelligence Engine")
-print("=" * 70)
+from pricing_engine.api.routes import router
 
-# -----------------------------
-# Start Worker
-# -----------------------------
-worker = subprocess.Popen(
-    ["python", "run_worker.py"]
+app = FastAPI(
+    title="Pricing Intelligence Engine",
+    version="1.0.0"
 )
 
-print("[✓] Redis Worker Started")
+# --------------------------------------------------
+# CORS
+# --------------------------------------------------
 
-time.sleep(2)
-
-# -----------------------------
-# Start FastAPI
-# -----------------------------
-api = subprocess.Popen(
-    [
-        "uvicorn",
-        "pricing_engine.api.app:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8000",
-    ]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-print("[✓] FastAPI Started")
+# --------------------------------------------------
+# Routes
+# --------------------------------------------------
 
-time.sleep(3)
-
-webbrowser.open("http://127.0.0.1:8000/docs")
-
-# -----------------------------
-# Run Spider
-# -----------------------------
-print("[✓] Starting Spider...")
-
-subprocess.run(
-    [
-        "scrapy",
-        "crawl",
-        "demo_shop",
-    ]
-)
-
-print("=" * 70)
-print("Pipeline Finished Successfully")
-print("=" * 70)
-
-worker.terminate()
-api.terminate()
+app.include_router(router)

@@ -1,5 +1,8 @@
 from fastapi import APIRouter
+
 from pricing_engine.storage.clickhouse_client import ClickHouseStorage
+from pricing_engine.api.schemas import Product
+
 
 router = APIRouter()
 
@@ -12,7 +15,6 @@ storage = ClickHouseStorage()
 
 @router.get("/")
 def home():
-
     return {
         "message": "Pricing Intelligence Engine API"
     }
@@ -24,7 +26,6 @@ def home():
 
 @router.get("/health")
 def health():
-
     return {
         "status": "healthy"
     }
@@ -36,8 +37,33 @@ def health():
 
 @router.get("/products")
 def get_products():
-
     return storage.get_all()
+
+
+# ---------------------------------------------------
+# Add Product
+# ---------------------------------------------------
+
+@router.post("/products")
+def add_product(product: Product):
+
+    data = {
+        "title": product.title,
+        "price": product.price,
+        "currency": product.currency,
+        "source": product.source,
+        "url": product.url,
+        "network": [],
+        "timestamp": ""
+    }
+
+    storage.insert(data)
+
+    return {
+        "status": "success",
+        "message": "Product stored successfully",
+        "product": data
+    }
 
 
 # ---------------------------------------------------
@@ -46,7 +72,6 @@ def get_products():
 
 @router.get("/products/count")
 def get_product_count():
-
     return {
         "count": storage.count()
     }
@@ -62,7 +87,6 @@ def latest_product():
     data = storage.get_all()
 
     if len(data) == 0:
-
         return {
             "message": "No Products Found"
         }
@@ -88,7 +112,6 @@ def search_products(keyword: str):
         title = item.get("title", "").lower()
 
         if keyword in title:
-
             results.append(item)
 
     return results
@@ -104,7 +127,6 @@ def stats():
     data = storage.get_all()
 
     if len(data) == 0:
-
         return {
             "total_products": 0,
             "average_price": 0,
@@ -117,17 +139,12 @@ def stats():
     for item in data:
 
         try:
+            prices.append(float(item["price"]))
 
-            prices.append(
-                float(item["price"])
-            )
-
-        except:
-
+        except (ValueError, TypeError, KeyError):
             pass
 
     if len(prices) == 0:
-
         return {
             "total_products": len(data),
             "average_price": 0,
@@ -136,16 +153,12 @@ def stats():
         }
 
     return {
-
         "total_products": len(data),
-
         "average_price": round(
             sum(prices) / len(prices),
             2
         ),
-
         "highest_price": max(prices),
-
         "lowest_price": min(prices)
     }
 
@@ -158,14 +171,9 @@ def stats():
 def version():
 
     return {
-
         "engine": "Pricing Intelligence Engine",
-
         "version": "1.0.0",
-
         "framework": "FastAPI",
-
-        "storage": "ClickHouse (Mock)",
-
+        "storage": "ClickHouse",
         "status": "Running"
     }
