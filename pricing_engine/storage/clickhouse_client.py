@@ -13,32 +13,11 @@ class ClickHouseStorage:
 
     def __init__(self):
 
-        self.host = os.getenv(
-            "CLICKHOUSE_HOST",
-            "127.0.0.1"
-        )
-
-        self.port = int(
-            os.getenv(
-                "CLICKHOUSE_PORT",
-                "8123"
-            )
-        )
-
-        self.username = os.getenv(
-            "CLICKHOUSE_USER",
-            "default"
-        )
-
-        self.password = os.getenv(
-            "CLICKHOUSE_PASSWORD",
-            "pricing123"
-        )
-
-        self.database = os.getenv(
-            "CLICKHOUSE_DATABASE",
-            "default"
-        )
+        self.host = os.getenv("CLICKHOUSE_HOST", "127.0.0.1")
+        self.port = int(os.getenv("CLICKHOUSE_PORT", "8123"))
+        self.username = os.getenv("CLICKHOUSE_USER", "default")
+        self.password = os.getenv("CLICKHOUSE_PASSWORD", "")
+        self.database = os.getenv("CLICKHOUSE_DATABASE", "default")
 
         print(
             f"[ClickHouse] Connecting to "
@@ -51,16 +30,17 @@ class ClickHouseStorage:
             username=self.username,
             password=self.password,
             database=self.database,
-            secure=True
+            connect_timeout=15,
+            send_receive_timeout=30,
         )
 
         print("[ClickHouse] Connected")
 
         self.create_table()
 
-    # ---------------------------------------------------
-    # Create Table
-    # ---------------------------------------------------
+    # =========================================================
+    # CREATE TABLE
+    # =========================================================
 
     def create_table(self):
 
@@ -84,11 +64,24 @@ class ClickHouseStorage:
 
         print("[ClickHouse] Products table ready")
 
-    # ---------------------------------------------------
-    # Insert
-    # ---------------------------------------------------
+    # =========================================================
+    # INSERT
+    # =========================================================
 
     def insert(self, data):
+
+        network = data.get("network", [])
+
+        if network is None:
+            network = []
+
+        if not isinstance(network, str):
+            network = json.dumps(network)
+
+        timestamp = data.get("timestamp", "")
+
+        if timestamp is None:
+            timestamp = ""
 
         record = [
             str(data.get("title", "")),
@@ -96,9 +89,9 @@ class ClickHouseStorage:
             float(data.get("price", 0)),
             str(data.get("source", "")),
             str(data.get("currency", "USD")),
-            json.dumps(data.get("network", [])),
-            str(data.get("timestamp", "")),
-            datetime.now(timezone.utc).isoformat()
+            network,
+            str(timestamp),
+            datetime.now(timezone.utc).isoformat(),
         ]
 
         self.client.insert(
@@ -112,8 +105,8 @@ class ClickHouseStorage:
                 "currency",
                 "network",
                 "timestamp",
-                "stored_at"
-            ]
+                "stored_at",
+            ],
         )
 
         print(
@@ -121,62 +114,61 @@ class ClickHouseStorage:
             f"{data.get('title', '')}"
         )
 
-    # ---------------------------------------------------
-    # Get All
-    # ---------------------------------------------------
+    # =========================================================
+    # GET ALL
+    # =========================================================
 
     def get_all(self):
 
-        print("[ClickHouse] Fetching products")
+        try:
 
-        result = self.client.query(
-            """
-            SELECT
-                title,
-                url,
-                price,
-                source,
-                currency,
-                network,
-                timestamp,
-                stored_at
-            FROM products
-            ORDER BY stored_at DESC
-            """
-        )
-
-        columns = result.column_names
-
-        products = []
-
-        for row in result.result_rows:
-
-            item = dict(
-                zip(columns, row)
+            result = self.client.query(
+                """
+                SELECT
+                    title,
+                    url,
+                    price,
+                    source,
+                    currency,
+                    network,
+                    timestamp,
+                    stored_at
+                FROM products
+                ORDER BY stored_at DESC
+                """
             )
 
-            # Make sure API receives JSON-safe values
-            item["title"] = str(item.get("title", ""))
-            item["url"] = str(item.get("url", ""))
-            item["price"] = float(item.get("price", 0))
-            item["source"] = str(item.get("source", ""))
-            item["currency"] = str(item.get("currency", ""))
-            item["network"] = str(item.get("network", ""))
-            item["timestamp"] = str(item.get("timestamp", ""))
-            item["stored_at"] = str(item.get("stored_at", ""))
+            products = []
 
-            products.append(item)
+            for row in result.result_rows:
 
-        print(
-            f"[ClickHouse] Retrieved "
-            f"{len(products)} products"
-        )
+                product = {
+                    "title": row[0],
+                    "url": row[1],
+                    "price": float(row[2]),
+                    "source": row[3],
+                    "currency": row[4],
+                    "network": row[5],
+                    "timestamp": row[6],
+                    "stored_at": row[7],
+                }
 
-        return products
+                products.append(product)
 
-    # ---------------------------------------------------
-    # Count
-    # ---------------------------------------------------
+            return products
+
+        except Exception as e:
+
+            print(
+                "[ClickHouse] GET PRODUCTS ERROR:",
+                repr(e)
+            )
+
+            raise
+
+    # =========================================================
+    # COUNT
+    # =========================================================
 
     def count(self):
 
@@ -189,9 +181,9 @@ class ClickHouseStorage:
 
         return int(result.result_rows[0][0])
 
-    # ---------------------------------------------------
-    # Clear
-    # ---------------------------------------------------
+    # =========================================================
+    # CLEAR
+    # =========================================================
 
     def clear(self):
 

@@ -9,9 +9,9 @@ router = APIRouter()
 storage = ClickHouseStorage()
 
 
-# ---------------------------------------------------
-# Home
-# ---------------------------------------------------
+# =========================================================
+# HOME
+# =========================================================
 
 @router.get("/")
 def home():
@@ -21,9 +21,9 @@ def home():
     }
 
 
-# ---------------------------------------------------
-# Health
-# ---------------------------------------------------
+# =========================================================
+# HEALTH
+# =========================================================
 
 @router.get("/health")
 def health():
@@ -33,9 +33,9 @@ def health():
     }
 
 
-# ---------------------------------------------------
-# Get All Products
-# ---------------------------------------------------
+# =========================================================
+# PRODUCTS
+# =========================================================
 
 @router.get("/products")
 def get_products():
@@ -46,20 +46,17 @@ def get_products():
 
     except Exception as e:
 
-        print(
-            "[API] GET /products ERROR:",
-            repr(e)
-        )
+        print("[API] GET /products ERROR:", repr(e))
 
         raise HTTPException(
             status_code=500,
-            detail="Unable to fetch products"
+            detail=f"ClickHouse products query failed: {str(e)}"
         )
 
 
-# ---------------------------------------------------
-# Add Product
-# ---------------------------------------------------
+# =========================================================
+# ADD PRODUCT
+# =========================================================
 
 @router.post("/products")
 def add_product(product: Product):
@@ -86,20 +83,17 @@ def add_product(product: Product):
 
     except Exception as e:
 
-        print(
-            "[API] POST /products ERROR:",
-            repr(e)
-        )
+        print("[API] POST /products ERROR:", repr(e))
 
         raise HTTPException(
             status_code=500,
-            detail="Unable to store product"
+            detail=f"Unable to store product: {str(e)}"
         )
 
 
-# ---------------------------------------------------
-# Count
-# ---------------------------------------------------
+# =========================================================
+# COUNT
+# =========================================================
 
 @router.get("/products/count")
 def get_product_count():
@@ -112,20 +106,17 @@ def get_product_count():
 
     except Exception as e:
 
-        print(
-            "[API] GET /products/count ERROR:",
-            repr(e)
-        )
+        print("[API] COUNT ERROR:", repr(e))
 
         raise HTTPException(
             status_code=500,
-            detail="Unable to count products"
+            detail=f"Unable to count products: {str(e)}"
         )
 
 
-# ---------------------------------------------------
-# Latest Product
-# ---------------------------------------------------
+# =========================================================
+# LATEST
+# =========================================================
 
 @router.get("/products/latest")
 def latest_product():
@@ -144,20 +135,17 @@ def latest_product():
 
     except Exception as e:
 
-        print(
-            "[API] GET /products/latest ERROR:",
-            repr(e)
-        )
+        print("[API] LATEST ERROR:", repr(e))
 
         raise HTTPException(
             status_code=500,
-            detail="Unable to fetch latest product"
+            detail=f"Unable to fetch latest product: {str(e)}"
         )
 
 
-# ---------------------------------------------------
-# Search
-# ---------------------------------------------------
+# =========================================================
+# SEARCH
+# =========================================================
 
 @router.get("/products/search")
 def search_products(keyword: str):
@@ -184,20 +172,17 @@ def search_products(keyword: str):
 
     except Exception as e:
 
-        print(
-            "[API] GET /products/search ERROR:",
-            repr(e)
-        )
+        print("[API] SEARCH ERROR:", repr(e))
 
         raise HTTPException(
             status_code=500,
-            detail="Unable to search products"
+            detail=f"Unable to search products: {str(e)}"
         )
 
 
-# ---------------------------------------------------
-# Statistics
-# ---------------------------------------------------
+# =========================================================
+# STATISTICS
+# =========================================================
 
 @router.get("/stats")
 def stats():
@@ -222,19 +207,13 @@ def stats():
             try:
 
                 prices.append(
-                    float(
-                        item.get(
-                            "price",
-                            0
-                        )
-                    )
+                    float(item.get("price", 0))
                 )
 
             except (
                 ValueError,
                 TypeError
             ):
-
                 continue
 
         if not prices:
@@ -261,20 +240,17 @@ def stats():
 
     except Exception as e:
 
-        print(
-            "[API] GET /stats ERROR:",
-            repr(e)
-        )
+        print("[API] GET /stats ERROR:", repr(e))
 
         raise HTTPException(
             status_code=500,
-            detail="Unable to calculate statistics"
+            detail=f"ClickHouse stats query failed: {str(e)}"
         )
 
 
-# ---------------------------------------------------
-# Version
-# ---------------------------------------------------
+# =========================================================
+# VERSION
+# =========================================================
 
 @router.get("/version")
 def version():
