@@ -1,22 +1,17 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import clickhouse_connect
 from dotenv import load_dotenv
 
 
-# Load environment variables from .env
 load_dotenv()
 
 
 class ClickHouseStorage:
 
     def __init__(self):
-
-        # ---------------------------------------
-        # Environment Configuration
-        # ---------------------------------------
 
         self.host = os.getenv(
             "CLICKHOUSE_HOST",
@@ -42,7 +37,7 @@ class ClickHouseStorage:
 
         self.database = os.getenv(
             "CLICKHOUSE_DATABASE",
-            "pricing"
+            "default"
         )
 
         print(
@@ -50,25 +45,22 @@ class ClickHouseStorage:
             f"{self.host}:{self.port}/{self.database}"
         )
 
-        # ---------------------------------------
-        # Connect
-        # ---------------------------------------
-
         self.client = clickhouse_connect.get_client(
             host=self.host,
             port=self.port,
             username=self.username,
             password=self.password,
-            database=self.database
+            database=self.database,
+            secure=True
         )
 
         print("[ClickHouse] Connected")
 
         self.create_table()
 
-    # ---------------------------------------
-    # Create Products Table
-    # ---------------------------------------
+    # ---------------------------------------------------
+    # Create Table
+    # ---------------------------------------------------
 
     def create_table(self):
 
@@ -90,58 +82,23 @@ class ClickHouseStorage:
             """
         )
 
-        print(
-            "[ClickHouse] Products table ready"
-        )
+        print("[ClickHouse] Products table ready")
 
-    # ---------------------------------------
-    # Insert Record
-    # ---------------------------------------
+    # ---------------------------------------------------
+    # Insert
+    # ---------------------------------------------------
 
     def insert(self, data):
 
         record = [
-
-            data.get(
-                "title",
-                ""
-            ),
-
-            data.get(
-                "url",
-                ""
-            ),
-
-            float(
-                data.get(
-                    "price",
-                    0
-                )
-            ),
-
-            data.get(
-                "source",
-                ""
-            ),
-
-            data.get(
-                "currency",
-                "USD"
-            ),
-
-            json.dumps(
-                data.get(
-                    "network",
-                    []
-                )
-            ),
-
-            data.get(
-                "timestamp",
-                ""
-            ),
-
-            datetime.utcnow().isoformat()
+            str(data.get("title", "")),
+            str(data.get("url", "")),
+            float(data.get("price", 0)),
+            str(data.get("source", "")),
+            str(data.get("currency", "USD")),
+            json.dumps(data.get("network", [])),
+            str(data.get("timestamp", "")),
+            datetime.now(timezone.utc).isoformat()
         ]
 
         self.client.insert(
@@ -164,11 +121,13 @@ class ClickHouseStorage:
             f"{data.get('title', '')}"
         )
 
-    # ---------------------------------------
-    # Get All Records
-    # ---------------------------------------
+    # ---------------------------------------------------
+    # Get All
+    # ---------------------------------------------------
 
     def get_all(self):
+
+        print("[ClickHouse] Fetching products")
 
         result = self.client.query(
             """
@@ -182,22 +141,42 @@ class ClickHouseStorage:
                 timestamp,
                 stored_at
             FROM products
-            ORDER BY stored_at
+            ORDER BY stored_at DESC
             """
         )
 
         columns = result.column_names
 
-        return [
-            dict(
+        products = []
+
+        for row in result.result_rows:
+
+            item = dict(
                 zip(columns, row)
             )
-            for row in result.result_rows
-        ]
 
-    # ---------------------------------------
+            # Make sure API receives JSON-safe values
+            item["title"] = str(item.get("title", ""))
+            item["url"] = str(item.get("url", ""))
+            item["price"] = float(item.get("price", 0))
+            item["source"] = str(item.get("source", ""))
+            item["currency"] = str(item.get("currency", ""))
+            item["network"] = str(item.get("network", ""))
+            item["timestamp"] = str(item.get("timestamp", ""))
+            item["stored_at"] = str(item.get("stored_at", ""))
+
+            products.append(item)
+
+        print(
+            f"[ClickHouse] Retrieved "
+            f"{len(products)} products"
+        )
+
+        return products
+
+    # ---------------------------------------------------
     # Count
-    # ---------------------------------------
+    # ---------------------------------------------------
 
     def count(self):
 
@@ -208,11 +187,11 @@ class ClickHouseStorage:
             """
         )
 
-        return result.result_rows[0][0]
+        return int(result.result_rows[0][0])
 
-    # ---------------------------------------
-    # Clear Storage
-    # ---------------------------------------
+    # ---------------------------------------------------
+    # Clear
+    # ---------------------------------------------------
 
     def clear(self):
 
@@ -220,6 +199,4 @@ class ClickHouseStorage:
             "TRUNCATE TABLE products"
         )
 
-        print(
-            "[ClickHouse] Storage Cleared"
-        )
+        print("[ClickHouse] Storage Cleared")
