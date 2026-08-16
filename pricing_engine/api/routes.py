@@ -6,23 +6,28 @@ from pricing_engine.api.schemas import Product
 
 router = APIRouter()
 
+# =========================================================
+# STORAGE
+# =========================================================
+
 storage = ClickHouseStorage()
 
 
-# ---------------------------------------------------
-# Home
-# ---------------------------------------------------
+# =========================================================
+# HOME
+# =========================================================
 
 @router.get("/")
 def home():
     return {
-        "message": "Pricing Intelligence Engine API"
+        "message": "Pricing Intelligence Engine API",
+        "status": "running",
     }
 
 
-# ---------------------------------------------------
-# Health
-# ---------------------------------------------------
+# =========================================================
+# HEALTH
+# =========================================================
 
 @router.get("/health")
 def health():
@@ -31,52 +36,39 @@ def health():
     }
 
 
-# ---------------------------------------------------
-# Get All Products
-# ---------------------------------------------------
+# =========================================================
+# GET ALL PRODUCTS
+# =========================================================
 
 @router.get("/products")
 def get_products():
 
     try:
-        data = storage.get_all()
 
-        cleaned = []
+        products = storage.get_all()
 
-        for item in data:
-            cleaned.append({
-                "title": str(item.get("title", "")),
-                "url": str(item.get("url", "")),
-                "price": float(item.get("price", 0)),
-                "source": str(item.get("source", "")),
-                "currency": str(item.get("currency", "USD")),
-                "network": str(item.get("network", "[]")),
-                "timestamp": str(item.get("timestamp", "")),
-                "stored_at": str(item.get("stored_at", ""))
-            })
-
-        return cleaned
+        return products
 
     except Exception as e:
 
         print(
-            f"[PRODUCTS ERROR] "
-            f"{type(e).__name__}: {e}"
+            "[API] GET /products ERROR:",
+            repr(e)
         )
 
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to fetch products",
-                "error_type": type(e).__name__,
-                "error": str(e)
-            }
+                "error": "Unable to fetch products",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
         )
 
 
-# ---------------------------------------------------
-# Add Product
-# ---------------------------------------------------
+# =========================================================
+# ADD PRODUCT
+# =========================================================
 
 @router.post("/products")
 def add_product(product: Product):
@@ -90,7 +82,7 @@ def add_product(product: Product):
             "source": product.source,
             "url": product.url,
             "network": [],
-            "timestamp": ""
+            "timestamp": "",
         }
 
         storage.insert(data)
@@ -98,29 +90,29 @@ def add_product(product: Product):
         return {
             "status": "success",
             "message": "Product stored successfully",
-            "product": data
+            "product": data,
         }
 
     except Exception as e:
 
         print(
-            f"[ADD PRODUCT ERROR] "
-            f"{type(e).__name__}: {e}"
+            "[API] POST /products ERROR:",
+            repr(e)
         )
 
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to store product",
-                "error_type": type(e).__name__,
-                "error": str(e)
-            }
+                "error": "Unable to store product",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
         )
 
 
-# ---------------------------------------------------
-# Count Products
-# ---------------------------------------------------
+# =========================================================
+# PRODUCT COUNT
+# =========================================================
 
 @router.get("/products/count")
 def get_product_count():
@@ -134,23 +126,23 @@ def get_product_count():
     except Exception as e:
 
         print(
-            f"[COUNT ERROR] "
-            f"{type(e).__name__}: {e}"
+            "[API] GET /products/count ERROR:",
+            repr(e)
         )
 
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to count products",
-                "error_type": type(e).__name__,
-                "error": str(e)
-            }
+                "error": "Unable to count products",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
         )
 
 
-# ---------------------------------------------------
-# Latest Product
-# ---------------------------------------------------
+# =========================================================
+# LATEST PRODUCT
+# =========================================================
 
 @router.get("/products/latest")
 def latest_product():
@@ -159,33 +151,34 @@ def latest_product():
 
         data = storage.get_all()
 
-        if len(data) == 0:
+        if not data:
+
             return {
                 "message": "No Products Found"
             }
 
-        return data[-1]
+        return data[0]
 
     except Exception as e:
 
         print(
-            f"[LATEST PRODUCT ERROR] "
-            f"{type(e).__name__}: {e}"
+            "[API] GET /products/latest ERROR:",
+            repr(e)
         )
 
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to fetch latest product",
-                "error_type": type(e).__name__,
-                "error": str(e)
-            }
+                "error": "Unable to fetch latest product",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
         )
 
 
-# ---------------------------------------------------
-# Search Products
-# ---------------------------------------------------
+# =========================================================
+# SEARCH PRODUCTS
+# =========================================================
 
 @router.get("/products/search")
 def search_products(keyword: str):
@@ -194,7 +187,7 @@ def search_products(keyword: str):
 
         data = storage.get_all()
 
-        keyword = keyword.lower()
+        keyword = keyword.lower().strip()
 
         results = []
 
@@ -205,6 +198,7 @@ def search_products(keyword: str):
             ).lower()
 
             if keyword in title:
+
                 results.append(item)
 
         return results
@@ -212,23 +206,23 @@ def search_products(keyword: str):
     except Exception as e:
 
         print(
-            f"[SEARCH ERROR] "
-            f"{type(e).__name__}: {e}"
+            "[API] GET /products/search ERROR:",
+            repr(e)
         )
 
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to search products",
-                "error_type": type(e).__name__,
-                "error": str(e)
-            }
+                "error": "Unable to search products",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
         )
 
 
-# ---------------------------------------------------
-# Statistics
-# ---------------------------------------------------
+# =========================================================
+# STATISTICS
+# =========================================================
 
 @router.get("/stats")
 def stats():
@@ -243,7 +237,7 @@ def stats():
                 "total_products": 0,
                 "average_price": 0,
                 "highest_price": 0,
-                "lowest_price": 0
+                "lowest_price": 0,
             }
 
         prices = []
@@ -252,19 +246,17 @@ def stats():
 
             try:
 
-                prices.append(
-                    float(
-                        item.get(
-                            "price",
-                            0
-                        )
-                    )
+                price = float(
+                    item.get("price", 0)
                 )
+
+                prices.append(price)
 
             except (
                 ValueError,
-                TypeError
+                TypeError,
             ):
+
                 continue
 
         if not prices:
@@ -273,39 +265,42 @@ def stats():
                 "total_products": len(data),
                 "average_price": 0,
                 "highest_price": 0,
-                "lowest_price": 0
+                "lowest_price": 0,
             }
 
         return {
             "total_products": len(data),
+
             "average_price": round(
                 sum(prices) / len(prices),
-                2
+                2,
             ),
+
             "highest_price": max(prices),
-            "lowest_price": min(prices)
+
+            "lowest_price": min(prices),
         }
 
     except Exception as e:
 
         print(
-            f"[STATS ERROR] "
-            f"{type(e).__name__}: {e}"
+            "[API] GET /stats ERROR:",
+            repr(e)
         )
 
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to calculate statistics",
-                "error_type": type(e).__name__,
-                "error": str(e)
-            }
+                "error": "Unable to calculate statistics",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
         )
 
 
-# ---------------------------------------------------
-# Version
-# ---------------------------------------------------
+# =========================================================
+# VERSION
+# =========================================================
 
 @router.get("/version")
 def version():
@@ -315,5 +310,5 @@ def version():
         "version": "1.0.0",
         "framework": "FastAPI",
         "storage": "ClickHouse",
-        "status": "Running"
+        "status": "Running",
     }
