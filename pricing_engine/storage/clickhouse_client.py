@@ -12,7 +12,6 @@ load_dotenv()
 class ClickHouseStorage:
 
     def __init__(self):
-
         self.host = os.getenv("CLICKHOUSE_HOST", "127.0.0.1")
         self.port = int(os.getenv("CLICKHOUSE_PORT", "8123"))
         self.username = os.getenv("CLICKHOUSE_USER", "default")
@@ -20,11 +19,17 @@ class ClickHouseStorage:
         self.database = os.getenv("CLICKHOUSE_DATABASE", "default")
 
         print(
-            f"[ClickHouse] Connecting to "
+            f"[ClickHouse] Storage configured: "
             f"{self.host}:{self.port}/{self.database}"
         )
 
-        self.client = clickhouse_connect.get_client(
+    # =========================================================
+    # NEW CLIENT PER OPERATION
+    # =========================================================
+
+    def get_client(self):
+
+        return clickhouse_connect.get_client(
             host=self.host,
             port=self.port,
             username=self.username,
@@ -34,35 +39,39 @@ class ClickHouseStorage:
             send_receive_timeout=30,
         )
 
-        print("[ClickHouse] Connected")
-
-        self.create_table()
-
     # =========================================================
     # CREATE TABLE
     # =========================================================
 
     def create_table(self):
 
-        self.client.command(
-            """
-            CREATE TABLE IF NOT EXISTS products
-            (
-                title String,
-                url String,
-                price Float64,
-                source String,
-                currency String,
-                network String,
-                timestamp String,
-                stored_at String
-            )
-            ENGINE = MergeTree()
-            ORDER BY stored_at
-            """
-        )
+        client = self.get_client()
 
-        print("[ClickHouse] Products table ready")
+        try:
+
+            client.command(
+                """
+                CREATE TABLE IF NOT EXISTS products
+                (
+                    title String,
+                    url String,
+                    price Float64,
+                    source String,
+                    currency String,
+                    network String,
+                    timestamp String,
+                    stored_at String
+                )
+                ENGINE = MergeTree()
+                ORDER BY stored_at
+                """
+            )
+
+            print("[ClickHouse] Products table ready")
+
+        finally:
+
+            client.close()
 
     # =========================================================
     # INSERT
@@ -70,49 +79,57 @@ class ClickHouseStorage:
 
     def insert(self, data):
 
-        network = data.get("network", [])
+        client = self.get_client()
 
-        if network is None:
-            network = []
+        try:
 
-        if not isinstance(network, str):
-            network = json.dumps(network)
+            network = data.get("network", [])
 
-        timestamp = data.get("timestamp", "")
+            if network is None:
+                network = []
 
-        if timestamp is None:
-            timestamp = ""
+            if not isinstance(network, str):
+                network = json.dumps(network)
 
-        record = [
-            str(data.get("title", "")),
-            str(data.get("url", "")),
-            float(data.get("price", 0)),
-            str(data.get("source", "")),
-            str(data.get("currency", "USD")),
-            network,
-            str(timestamp),
-            datetime.now(timezone.utc).isoformat(),
-        ]
+            timestamp = data.get("timestamp", "")
 
-        self.client.insert(
-            "products",
-            [record],
-            column_names=[
-                "title",
-                "url",
-                "price",
-                "source",
-                "currency",
-                "network",
-                "timestamp",
-                "stored_at",
-            ],
-        )
+            if timestamp is None:
+                timestamp = ""
 
-        print(
-            f"[ClickHouse] Stored: "
-            f"{data.get('title', '')}"
-        )
+            record = [
+                str(data.get("title", "")),
+                str(data.get("url", "")),
+                float(data.get("price", 0)),
+                str(data.get("source", "")),
+                str(data.get("currency", "USD")),
+                network,
+                str(timestamp),
+                datetime.now(timezone.utc).isoformat(),
+            ]
+
+            client.insert(
+                "products",
+                [record],
+                column_names=[
+                    "title",
+                    "url",
+                    "price",
+                    "source",
+                    "currency",
+                    "network",
+                    "timestamp",
+                    "stored_at",
+                ],
+            )
+
+            print(
+                f"[ClickHouse] Stored: "
+                f"{data.get('title', '')}"
+            )
+
+        finally:
+
+            client.close()
 
     # =========================================================
     # GET ALL
@@ -120,9 +137,11 @@ class ClickHouseStorage:
 
     def get_all(self):
 
+        client = self.get_client()
+
         try:
 
-            result = self.client.query(
+            result = client.query(
                 """
                 SELECT
                     title,
@@ -142,7 +161,7 @@ class ClickHouseStorage:
 
             for row in result.result_rows:
 
-                product = {
+                products.append({
                     "title": row[0],
                     "url": row[1],
                     "price": float(row[2]),
@@ -151,9 +170,7 @@ class ClickHouseStorage:
                     "network": row[5],
                     "timestamp": row[6],
                     "stored_at": row[7],
-                }
-
-                products.append(product)
+                })
 
             return products
 
@@ -166,20 +183,32 @@ class ClickHouseStorage:
 
             raise
 
+        finally:
+
+            client.close()
+
     # =========================================================
     # COUNT
     # =========================================================
 
     def count(self):
 
-        result = self.client.query(
-            """
-            SELECT count()
-            FROM products
-            """
-        )
+        client = self.get_client()
 
-        return int(result.result_rows[0][0])
+        try:
+
+            result = client.query(
+                """
+                SELECT count()
+                FROM products
+                """
+            )
+
+            return int(result.result_rows[0][0])
+
+        finally:
+
+            client.close()
 
     # =========================================================
     # CLEAR
@@ -187,8 +216,16 @@ class ClickHouseStorage:
 
     def clear(self):
 
-        self.client.command(
-            "TRUNCATE TABLE products"
-        )
+        client = self.get_client()
 
-        print("[ClickHouse] Storage Cleared")
+        try:
+
+            client.command(
+                "TRUNCATE TABLE products"
+            )
+
+            print("[ClickHouse] Storage Cleared")
+
+        finally:
+
+            client.close()
