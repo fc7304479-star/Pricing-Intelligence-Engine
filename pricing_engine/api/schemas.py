@@ -1,9 +1,15 @@
 from pydantic import BaseModel
+from typing import Optional
 
 
 class Product(BaseModel):
-    title: str
-    price: float
+    goods_id: str
+    product_name: str
+    product_url: str = ""
+    price: Optional[float] = None
+    original_price: Optional[float] = None
+    discount: Optional[float] = None
+    source: str = "SHEIN"
     currency: str = "USD"
-    source: str = ""
-    url: str = ""
+    availability: str = "unknown"
+    scraped_at: str = ""

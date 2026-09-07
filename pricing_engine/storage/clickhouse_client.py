@@ -1,5 +1,4 @@
 import os
-import json
 from datetime import datetime, timezone
 
 import clickhouse_connect
@@ -12,11 +11,32 @@ load_dotenv()
 class ClickHouseStorage:
 
     def __init__(self):
-        self.host = os.getenv("CLICKHOUSE_HOST", "127.0.0.1")
-        self.port = int(os.getenv("CLICKHOUSE_PORT", "8123"))
-        self.username = os.getenv("CLICKHOUSE_USER", "default")
-        self.password = os.getenv("CLICKHOUSE_PASSWORD", "")
-        self.database = os.getenv("CLICKHOUSE_DATABASE", "default")
+        self.host = os.getenv(
+            "CLICKHOUSE_HOST",
+            "127.0.0.1"
+        )
+
+        self.port = int(
+            os.getenv(
+                "CLICKHOUSE_PORT",
+                "8123"
+            )
+        )
+
+        self.username = os.getenv(
+            "CLICKHOUSE_USER",
+            "default"
+        )
+
+        self.password = os.getenv(
+            "CLICKHOUSE_PASSWORD",
+            ""
+        )
+
+        self.database = os.getenv(
+            "CLICKHOUSE_DATABASE",
+            "default"
+        )
 
         print(
             f"[ClickHouse] Storage configured: "
@@ -24,7 +44,7 @@ class ClickHouseStorage:
         )
 
     # =========================================================
-    # NEW CLIENT PER OPERATION
+    # CLIENT
     # =========================================================
 
     def get_client(self):
@@ -53,13 +73,19 @@ class ClickHouseStorage:
                 """
                 CREATE TABLE IF NOT EXISTS products
                 (
-                    title String,
-                    url String,
-                    price Float64,
+                    goods_id String,
+                    product_name String,
+                    product_url String,
+
+                    price Nullable(Float64),
+                    original_price Nullable(Float64),
+                    discount Nullable(Float64),
+
                     source String,
                     currency String,
-                    network String,
-                    timestamp String,
+                    availability String,
+
+                    scraped_at String,
                     stored_at String
                 )
                 ENGINE = MergeTree()
@@ -67,7 +93,9 @@ class ClickHouseStorage:
                 """
             )
 
-            print("[ClickHouse] Products table ready")
+            print(
+                "[ClickHouse] Products table ready"
+            )
 
         finally:
 
@@ -83,48 +111,119 @@ class ClickHouseStorage:
 
         try:
 
-            network = data.get("network", [])
+            price = data.get("price")
 
-            if network is None:
-                network = []
+            if price is not None:
+                price = float(price)
 
-            if not isinstance(network, str):
-                network = json.dumps(network)
+            original_price = data.get(
+                "original_price"
+            )
 
-            timestamp = data.get("timestamp", "")
+            if original_price is not None:
+                original_price = float(
+                    original_price
+                )
 
-            if timestamp is None:
-                timestamp = ""
+            discount = data.get(
+                "discount"
+            )
+
+            if discount is not None:
+                discount = float(
+                    discount
+                )
+
+            scraped_at = data.get(
+                "scraped_at"
+            )
+
+            if not scraped_at:
+                scraped_at = datetime.now(
+                    timezone.utc
+                ).isoformat()
+
+            stored_at = datetime.now(
+                timezone.utc
+            ).isoformat()
 
             record = [
-                str(data.get("title", "")),
-                str(data.get("url", "")),
-                float(data.get("price", 0)),
-                str(data.get("source", "")),
-                str(data.get("currency", "USD")),
-                network,
-                str(timestamp),
-                datetime.now(timezone.utc).isoformat(),
+                str(
+                    data.get(
+                        "goods_id",
+                        ""
+                    )
+                ),
+
+                str(
+                    data.get(
+                        "product_name",
+                        ""
+                    )
+                ),
+
+                str(
+                    data.get(
+                        "product_url",
+                        ""
+                    )
+                ),
+
+                price,
+
+                original_price,
+
+                discount,
+
+                str(
+                    data.get(
+                        "source",
+                        "SHEIN"
+                    )
+                ),
+
+                str(
+                    data.get(
+                        "currency",
+                        "USD"
+                    )
+                ),
+
+                str(
+                    data.get(
+                        "availability",
+                        ""
+                    )
+                ),
+
+                str(scraped_at),
+
+                str(stored_at),
             ]
 
             client.insert(
                 "products",
                 [record],
                 column_names=[
-                    "title",
-                    "url",
+                    "goods_id",
+                    "product_name",
+                    "product_url",
                     "price",
+                    "original_price",
+                    "discount",
                     "source",
                     "currency",
-                    "network",
-                    "timestamp",
+                    "availability",
+                    "scraped_at",
                     "stored_at",
                 ],
             )
 
             print(
-                f"[ClickHouse] Stored: "
-                f"{data.get('title', '')}"
+                "[ClickHouse] Stored: "
+                f"{data.get('goods_id', '')} | "
+                f"{data.get('product_name', '')} | "
+                f"price={price}"
             )
 
         finally:
@@ -144,15 +243,20 @@ class ClickHouseStorage:
             result = client.query(
                 """
                 SELECT
-                    title,
-                    url,
+                    goods_id,
+                    product_name,
+                    product_url,
                     price,
+                    original_price,
+                    discount,
                     source,
                     currency,
-                    network,
-                    timestamp,
+                    availability,
+                    scraped_at,
                     stored_at
+
                 FROM products
+
                 ORDER BY stored_at DESC
                 """
             )
@@ -162,14 +266,40 @@ class ClickHouseStorage:
             for row in result.result_rows:
 
                 products.append({
-                    "title": row[0],
-                    "url": row[1],
-                    "price": float(row[2]),
-                    "source": row[3],
-                    "currency": row[4],
-                    "network": row[5],
-                    "timestamp": row[6],
-                    "stored_at": row[7],
+
+                    "goods_id": row[0],
+
+                    "product_name": row[1],
+
+                    "product_url": row[2],
+
+                    "price": (
+                        float(row[3])
+                        if row[3] is not None
+                        else None
+                    ),
+
+                    "original_price": (
+                        float(row[4])
+                        if row[4] is not None
+                        else None
+                    ),
+
+                    "discount": (
+                        float(row[5])
+                        if row[5] is not None
+                        else None
+                    ),
+
+                    "source": row[6],
+
+                    "currency": row[7],
+
+                    "availability": row[8],
+
+                    "scraped_at": row[9],
+
+                    "stored_at": row[10],
                 })
 
             return products
@@ -204,7 +334,9 @@ class ClickHouseStorage:
                 """
             )
 
-            return int(result.result_rows[0][0])
+            return int(
+                result.result_rows[0][0]
+            )
 
         finally:
 
@@ -224,7 +356,9 @@ class ClickHouseStorage:
                 "TRUNCATE TABLE products"
             )
 
-            print("[ClickHouse] Storage Cleared")
+            print(
+                "[ClickHouse] Storage Cleared"
+            )
 
         finally:
 

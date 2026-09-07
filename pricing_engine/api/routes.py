@@ -6,6 +6,7 @@ from pricing_engine.api.schemas import Product
 
 router = APIRouter()
 
+
 # =========================================================
 # STORAGE
 # =========================================================
@@ -20,6 +21,7 @@ storage.create_table()
 
 @router.get("/")
 def home():
+
     return {
         "message": "Pricing Intelligence Engine API",
         "status": "running",
@@ -32,6 +34,7 @@ def home():
 
 @router.get("/health")
 def health():
+
     return {
         "status": "healthy"
     }
@@ -46,9 +49,7 @@ def get_products():
 
     try:
 
-        products = storage.get_all()
-
-        return products
+        return storage.get_all()
 
     except Exception as e:
 
@@ -77,13 +78,16 @@ def add_product(product: Product):
     try:
 
         data = {
-            "title": product.title,
+            "goods_id": product.goods_id,
+            "product_name": product.product_name,
+            "product_url": product.product_url,
             "price": product.price,
-            "currency": product.currency,
+            "original_price": product.original_price,
+            "discount": product.discount,
             "source": product.source,
-            "url": product.url,
-            "network": [],
-            "timestamp": "",
+            "currency": product.currency,
+            "availability": product.availability,
+            "scraped_at": product.scraped_at,
         }
 
         storage.insert(data)
@@ -194,11 +198,11 @@ def search_products(keyword: str):
 
         for item in data:
 
-            title = str(
-                item.get("title", "")
+            product_name = str(
+                item.get("product_name", "")
             ).lower()
 
-            if keyword in title:
+            if keyword in product_name:
 
                 results.append(item)
 
