@@ -32,25 +32,21 @@ class PricingEnginePipeline:
 
     def process_item(self, item, spider=None):
 
-        data = ItemAdapter(
-            item
-        ).asdict()
+        data = ItemAdapter(item).asdict()
 
-        goods_id = data.get(
-            "goods_id"
-        )
+        goods_id = str(
+            data.get("goods_id") or ""
+        ).strip()
 
-        price = data.get(
-            "price"
-        )
+        price = data.get("price")
 
-        status = data.get(
-            "availability"
-        )
+        product_name = str(
+            data.get("product_name") or ""
+        ).strip()
 
-        product_name = data.get(
-            "product_name"
-        )
+        availability = str(
+            data.get("availability") or ""
+        ).strip()
 
         spider_name = (
             spider.name
@@ -61,78 +57,83 @@ class PricingEnginePipeline:
         if spider:
 
             spider.logger.info(
-
                 "[PIPELINE] Processing | "
-
                 f"goods_id={goods_id} | "
-
                 f"name={product_name} | "
-
-                f"status={status} | "
-
+                f"status={availability} | "
                 f"price={price}"
-
             )
 
-        # -----------------------------------------------------
-        # Skip products without price
-        # -----------------------------------------------------
+        # =====================================================
+        # PRODUCT IDENTITY VALIDATION
+        # =====================================================
 
-        if price is None:
+        # A product without goods_id cannot safely receive
+        # a normalized product identity.
+        #
+        # IMPORTANT:
+        # Never create:
+        #
+        #     SHEIN-
+        #
+        # for an empty goods_id.
+
+        if not goods_id:
 
             if spider:
 
                 spider.logger.warning(
-
-                    "[PIPELINE] Skipping "
-                    "ClickHouse insert for "
-
-                    f"{goods_id} because "
-                    "price is None"
-
+                    "[PIPELINE] Skipping normalized storage "
+                    "because goods_id is empty"
                 )
 
             return item
 
-        # -----------------------------------------------------
-        # Insert ClickHouse
-        # -----------------------------------------------------
+        # =====================================================
+        # NORMALIZED CLICKHOUSE STORAGE
+        # =====================================================
 
         try:
 
-            self.storage.insert(
+            stored = self.storage.store_normalized(
                 data
             )
 
-            if spider:
+            if stored:
 
-                spider.logger.info(
+                if spider:
 
-                    "[PIPELINE] Inserted "
+                    spider.logger.info(
+                        "[PIPELINE] Normalized storage "
+                        "successful | "
+                        f"goods_id={goods_id}"
+                    )
 
-                    f"{goods_id} into "
-                    "ClickHouse"
+            else:
 
-                )
+                if spider:
+
+                    spider.logger.warning(
+                        "[PIPELINE] Normalized storage "
+                        "returned False | "
+                        f"goods_id={goods_id}"
+                    )
 
         except Exception as e:
 
             if spider:
 
                 spider.logger.error(
-
-                    "[PIPELINE] ClickHouse "
-                    "insert failed for "
-
-                    f"{goods_id}: "
-                    f"{repr(e)}"
-
+                    "[PIPELINE] Normalized ClickHouse "
+                    "insert failed | "
+                    f"goods_id={goods_id} | "
+                    f"error={repr(e)}"
                 )
 
             else:
 
                 print(
-                    "[PIPELINE] ClickHouse "
+                    "[PIPELINE] Normalized ClickHouse "
                     f"insert failed: {repr(e)}"
                 )
 
@@ -147,11 +148,11 @@ class PricingEnginePipeline:
         if spider:
 
             spider.logger.info(
-                "[PIPELINE] Pricing pipeline closed"
+                "[PIPELINE] Pricing normalized pipeline closed"
             )
 
         else:
 
             print(
-                "[PIPELINE] Pricing pipeline closed"
+                "[PIPELINE] Pricing normalized pipeline closed"
             )

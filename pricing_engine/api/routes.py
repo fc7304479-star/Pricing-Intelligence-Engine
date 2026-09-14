@@ -41,7 +41,10 @@ def health():
 
 
 # =========================================================
-# GET ALL PRODUCTS
+# GET NORMALIZED PRODUCTS
+#
+# Returns ONE logical row per product with its latest
+# available price observation.
 # =========================================================
 
 @router.get("/products")
@@ -49,7 +52,7 @@ def get_products():
 
     try:
 
-        return storage.get_all()
+        return storage.get_normalized_products()
 
     except Exception as e:
 
@@ -61,7 +64,7 @@ def get_products():
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "Unable to fetch products",
+                "error": "Unable to fetch normalized products",
                 "type": type(e).__name__,
                 "message": str(e),
             },
@@ -69,7 +72,7 @@ def get_products():
 
 
 # =========================================================
-# ADD PRODUCT
+# ADD NORMALIZED PRODUCT
 # =========================================================
 
 @router.post("/products")
@@ -90,13 +93,29 @@ def add_product(product: Product):
             "scraped_at": product.scraped_at,
         }
 
-        storage.insert(data)
+        stored = storage.store_normalized(
+            data
+        )
+
+        if not stored:
+
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Product was not stored",
+                    "message": "goods_id is required",
+                },
+            )
 
         return {
             "status": "success",
-            "message": "Product stored successfully",
+            "message": "Product stored in normalized storage",
             "product": data,
         }
+
+    except HTTPException:
+
+        raise
 
     except Exception as e:
 
@@ -108,7 +127,7 @@ def add_product(product: Product):
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "Unable to store product",
+                "error": "Unable to store normalized product",
                 "type": type(e).__name__,
                 "message": str(e),
             },
@@ -125,7 +144,7 @@ def get_product_count():
     try:
 
         return {
-            "count": storage.count()
+            "count": storage.normalized_product_count()
         }
 
     except Exception as e:
@@ -138,7 +157,7 @@ def get_product_count():
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "Unable to count products",
+                "error": "Unable to count normalized products",
                 "type": type(e).__name__,
                 "message": str(e),
             },
@@ -154,7 +173,7 @@ def latest_product():
 
     try:
 
-        data = storage.get_all()
+        data = storage.get_normalized_products()
 
         if not data:
 
@@ -190,19 +209,44 @@ def search_products(keyword: str):
 
     try:
 
-        data = storage.get_all()
-
         keyword = keyword.lower().strip()
+
+        if not keyword:
+
+            return []
+
+        data = storage.get_normalized_products()
 
         results = []
 
         for item in data:
 
             product_name = str(
-                item.get("product_name", "")
+                item.get(
+                    "product_name",
+                    ""
+                )
             ).lower()
 
-            if keyword in product_name:
+            source_product_id = str(
+                item.get(
+                    "source_product_id",
+                    ""
+                )
+            ).lower()
+
+            source = str(
+                item.get(
+                    "source",
+                    ""
+                )
+            ).lower()
+
+            if (
+                keyword in product_name
+                or keyword in source_product_id
+                or keyword in source
+            ):
 
                 results.append(item)
 
@@ -226,7 +270,39 @@ def search_products(keyword: str):
 
 
 # =========================================================
+# PRICE OBSERVATIONS
+#
+# Returns complete normalized price history.
+# =========================================================
+
+@router.get("/observations")
+def get_observations():
+
+    try:
+
+        return storage.get_observations()
+
+    except Exception as e:
+
+        print(
+            "[API] GET /observations ERROR:",
+            repr(e)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Unable to fetch price observations",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
+        )
+
+
+# =========================================================
 # STATISTICS
+#
+# Calculated from NORMALIZED products.
 # =========================================================
 
 @router.get("/stats")
@@ -234,28 +310,25 @@ def stats():
 
     try:
 
-        data = storage.get_all()
+        data = storage.get_normalized_products()
 
-        if not data:
-
-            return {
-                "total_products": 0,
-                "average_price": 0,
-                "highest_price": 0,
-                "lowest_price": 0,
-            }
+        total_products = len(data)
 
         prices = []
 
         for item in data:
 
+            price = item.get("price")
+
+            if price is None:
+
+                continue
+
             try:
 
-                price = float(
-                    item.get("price", 0)
+                prices.append(
+                    float(price)
                 )
-
-                prices.append(price)
 
             except (
                 ValueError,
@@ -267,23 +340,27 @@ def stats():
         if not prices:
 
             return {
-                "total_products": len(data),
+                "total_products": total_products,
                 "average_price": 0,
                 "highest_price": 0,
                 "lowest_price": 0,
             }
 
         return {
-            "total_products": len(data),
+            "total_products": total_products,
 
             "average_price": round(
                 sum(prices) / len(prices),
                 2,
             ),
 
-            "highest_price": max(prices),
+            "highest_price": max(
+                prices
+            ),
 
-            "lowest_price": min(prices),
+            "lowest_price": min(
+                prices
+            ),
         }
 
     except Exception as e:
@@ -296,7 +373,65 @@ def stats():
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "Unable to calculate statistics",
+                "error": "Unable to calculate normalized statistics",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
+        )
+
+
+# =========================================================
+# NORMALIZED CATALOG
+#
+# Optional endpoint for catalog-only data.
+# =========================================================
+
+@router.get("/catalog")
+def get_catalog():
+
+    try:
+
+        return storage.get_catalog()
+
+    except Exception as e:
+
+        print(
+            "[API] GET /catalog ERROR:",
+            repr(e)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Unable to fetch product catalog",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
+        )
+
+
+# =========================================================
+# NORMALIZED COUNTS
+# =========================================================
+
+@router.get("/normalized/counts")
+def normalized_counts():
+
+    try:
+
+        return storage.normalized_counts()
+
+    except Exception as e:
+
+        print(
+            "[API] GET /normalized/counts ERROR:",
+            repr(e)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Unable to fetch normalized counts",
                 "type": type(e).__name__,
                 "message": str(e),
             },
@@ -315,5 +450,6 @@ def version():
         "version": "1.0.0",
         "framework": "FastAPI",
         "storage": "ClickHouse",
+        "data_model": "Normalized",
         "status": "Running",
     }

@@ -13,6 +13,10 @@ class QueueWorker:
 
         self.storage = ClickHouseStorage()
 
+    # =========================================================
+    # RUN WORKER
+    # =========================================================
+
     def run(self):
 
         print("=" * 60)
@@ -33,12 +37,88 @@ class QueueWorker:
 
                 data = json.loads(item)
 
-                self.storage.insert(data)
+                # =================================================
+                # NORMALIZE QUEUE DATA
+                # =================================================
+
+                # Queue historically uses "title".
+                # Normalized ClickHouse storage uses
+                # "product_name".
+
+                if not data.get("product_name"):
+
+                    data["product_name"] = (
+                        data.get("title")
+                        or ""
+                    )
+
+                # -------------------------------------------------
+                # SOURCE
+                # -------------------------------------------------
+
+                if not data.get("source"):
+
+                    data["source"] = (
+                        data.get("spider_name")
+                        or "SHEIN"
+                    )
+
+                # =================================================
+                # GOODS ID VALIDATION
+                # =================================================
+
+                goods_id = str(
+                    data.get("goods_id") or ""
+                ).strip()
+
+                if not goods_id:
+
+                    print(
+                        "[Worker] Skipped -> "
+                        "goods_id is empty"
+                    )
+
+                    continue
+
+                # =================================================
+                # NORMALIZED STORAGE
+                # =================================================
+
+                stored = self.storage.store_normalized(
+                    data
+                )
+
+                if stored:
+
+                    print(
+                        "[Worker] Normalized stored -> "
+                        f"{data.get('product_name', '')}"
+                    )
+
+                else:
+
+                    print(
+                        "[Worker] Storage returned False -> "
+                        f"{goods_id}"
+                    )
+
+            except json.JSONDecodeError as e:
 
                 print(
-                    f"[Worker] Stored -> {data['title']}"
+                    "[Worker] Invalid JSON -> "
+                    f"{repr(e)}"
                 )
 
             except Exception as e:
 
-                print(e)
+                print(
+                    "[Worker] Processing error -> "
+                    f"{repr(e)}"
+                )
+
+
+if __name__ == "__main__":
+
+    worker = QueueWorker()
+
+    worker.run()
