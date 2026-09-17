@@ -300,6 +300,239 @@ def get_observations():
 
 
 # =========================================================
+# PRICE CHANGE DETECTION
+#
+# Compares consecutive price observations for each product.
+#
+# Returns:
+# - previous price
+# - current price
+# - absolute change
+# - percentage change
+# - direction
+# - observation timestamps
+# =========================================================
+
+@router.get("/price-changes")
+def get_price_changes():
+
+    try:
+
+        observations = storage.get_observations()
+
+        # -----------------------------------------------------
+        # Group observations by product
+        # -----------------------------------------------------
+
+        grouped = {}
+
+        for item in observations:
+
+            product_id = item.get(
+                "product_id"
+            )
+
+            if not product_id:
+
+                continue
+
+            grouped.setdefault(
+                product_id,
+                []
+            ).append(item)
+
+        changes = []
+
+        # -----------------------------------------------------
+        # Compare consecutive observations
+        # -----------------------------------------------------
+
+        for product_id, product_observations in grouped.items():
+
+            # Sort oldest -> newest
+            product_observations.sort(
+                key=lambda x: (
+                    x.get(
+                        "observed_at"
+                    )
+                    or ""
+                )
+            )
+
+            for index in range(
+                1,
+                len(product_observations)
+            ):
+
+                previous = product_observations[
+                    index - 1
+                ]
+
+                current = product_observations[
+                    index
+                ]
+
+                previous_price = previous.get(
+                    "price"
+                )
+
+                current_price = current.get(
+                    "price"
+                )
+
+                # -------------------------------------------------
+                # Skip observations without valid prices
+                # -------------------------------------------------
+
+                if (
+                    previous_price is None
+                    or current_price is None
+                ):
+
+                    continue
+
+                try:
+
+                    previous_price = float(
+                        previous_price
+                    )
+
+                    current_price = float(
+                        current_price
+                    )
+
+                except (
+                    ValueError,
+                    TypeError,
+                ):
+
+                    continue
+
+                # -------------------------------------------------
+                # Calculate price movement
+                # -------------------------------------------------
+
+                change_amount = (
+                    current_price
+                    - previous_price
+                )
+
+                if previous_price == 0:
+
+                    change_percent = None
+
+                else:
+
+                    change_percent = (
+                        (
+                            change_amount
+                            / previous_price
+                        )
+                        * 100
+                    )
+
+                # -------------------------------------------------
+                # Determine direction
+                # -------------------------------------------------
+
+                if change_amount > 0:
+
+                    direction = "increase"
+
+                elif change_amount < 0:
+
+                    direction = "decrease"
+
+                else:
+
+                    direction = "unchanged"
+
+                # -------------------------------------------------
+                # Add detected change
+                # -------------------------------------------------
+
+                changes.append({
+
+                    "product_id": product_id,
+
+                    "source": current.get(
+                        "source"
+                    ),
+
+                    "source_product_id": current.get(
+                        "source_product_id"
+                    ),
+
+                    "previous_price": round(
+                        previous_price,
+                        2
+                    ),
+
+                    "current_price": round(
+                        current_price,
+                        2
+                    ),
+
+                    "change_amount": round(
+                        change_amount,
+                        2
+                    ),
+
+                    "change_percent": (
+                        round(
+                            change_percent,
+                            2
+                        )
+                        if change_percent is not None
+                        else None
+                    ),
+
+                    "direction": direction,
+
+                    "previous_observed_at": previous.get(
+                        "observed_at"
+                    ),
+
+                    "current_observed_at": current.get(
+                        "observed_at"
+                    ),
+
+                })
+
+        # -----------------------------------------------------
+        # Newest changes first
+        # -----------------------------------------------------
+
+        changes.sort(
+            key=lambda x: (
+                x.get(
+                    "current_observed_at"
+                )
+                or ""
+            ),
+            reverse=True,
+        )
+
+        return changes
+
+    except Exception as e:
+
+        print(
+            "[API] GET /price-changes ERROR:",
+            repr(e)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Unable to calculate price changes",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
+        )
+
+
+# =========================================================
 # STATISTICS
 #
 # Calculated from NORMALIZED products.

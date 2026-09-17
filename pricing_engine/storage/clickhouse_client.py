@@ -895,6 +895,8 @@ class ClickHouseStorage:
 
     # =========================================================
     # GET PRICE OBSERVATIONS
+    #
+    # Returns complete normalized price history.
     # =========================================================
 
     def get_observations(self):
@@ -968,6 +970,222 @@ class ClickHouseStorage:
                 })
 
             return observations
+
+        finally:
+
+            client.close()
+
+    # =========================================================
+    # GET PRICE CHANGES
+    #
+    # Calculates consecutive price movements directly inside
+    # ClickHouse using lagInFrame().
+    #
+    # This avoids loading the complete observation history
+    # into Python for price-change detection.
+    # =========================================================
+
+    def get_price_changes(self):
+
+        client = self.get_client()
+
+        try:
+
+            result = client.query(
+                """
+                SELECT
+                    product_id,
+                    source,
+                    source_product_id,
+                    previous_price,
+                    current_price,
+                    change_amount,
+                    change_percent,
+                    direction,
+                    previous_observed_at,
+                    current_observed_at
+
+                FROM
+                (
+                    SELECT
+                        product_id,
+                        source,
+                        source_product_id,
+
+                        previous_price,
+
+                        current_price,
+
+                        (
+                            current_price - previous_price
+                        ) AS change_amount,
+
+                        if(
+                            previous_price = 0,
+                            NULL,
+                            (
+                                (
+                                    current_price
+                                    - previous_price
+                                )
+                                / previous_price
+                            ) * 100
+                        ) AS change_percent,
+
+                        multiIf(
+                            current_price - previous_price > 0,
+                            'increase',
+
+                            current_price - previous_price < 0,
+                            'decrease',
+
+                            'unchanged'
+                        ) AS direction,
+
+                        previous_observed_at,
+
+                        current_observed_at
+
+                    FROM
+                    (
+                        SELECT
+                            product_id,
+                            source,
+                            source_product_id,
+
+                            lagInFrame(price)
+                            OVER
+                            (
+                                PARTITION BY product_id
+                                ORDER BY observed_at ASC
+                            ) AS previous_price,
+
+                            price AS current_price,
+
+                            lagInFrame(observed_at)
+                            OVER
+                            (
+                                PARTITION BY product_id
+                                ORDER BY observed_at ASC
+                            ) AS previous_observed_at,
+
+                            observed_at AS current_observed_at
+
+                        FROM price_observations
+
+                        WHERE price IS NOT NULL
+                    )
+
+                    WHERE previous_price IS NOT NULL
+                )
+
+                ORDER BY current_observed_at DESC
+                """
+            )
+
+            changes = []
+
+            for row in result.result_rows:
+
+                previous_price = (
+                    float(row[3])
+                    if row[3] is not None
+                    else None
+                )
+
+                current_price = (
+                    float(row[4])
+                    if row[4] is not None
+                    else None
+                )
+
+                change_amount = (
+                    float(row[5])
+                    if row[5] is not None
+                    else None
+                )
+
+                change_percent = (
+                    float(row[6])
+                    if row[6] is not None
+                    else None
+                )
+
+                changes.append({
+
+                    "product_id": row[0],
+
+                    "source": row[1],
+
+                    "source_product_id": row[2],
+
+                    "previous_price": (
+                        round(
+                            previous_price,
+                            2
+                        )
+                        if previous_price is not None
+                        else None
+                    ),
+
+                    "current_price": (
+                        round(
+                            current_price,
+                            2
+                        )
+                        if current_price is not None
+                        else None
+                    ),
+
+                    "change_amount": (
+                        round(
+                            change_amount,
+                            2
+                        )
+                        if change_amount is not None
+                        else None
+                    ),
+
+                    "change_percent": (
+                        round(
+                            change_percent,
+                            2
+                        )
+                        if change_percent is not None
+                        else None
+                    ),
+
+                    "direction": row[7],
+
+                    "previous_observed_at": (
+                        str(row[8])
+                        if row[8] is not None
+                        else None
+                    ),
+
+                    "current_observed_at": (
+                        str(row[9])
+                        if row[9] is not None
+                        else None
+                    ),
+                })
+
+            print(
+                "[ClickHouse] GET PRICE CHANGES:",
+                len(changes),
+                "records"
+            )
+
+            return changes
+
+        except Exception as e:
+
+            print(
+                "[ClickHouse] GET PRICE CHANGES ERROR:",
+                repr(e)
+            )
+
+            raise
 
         finally:
 
