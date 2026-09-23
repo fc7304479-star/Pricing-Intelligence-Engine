@@ -976,6 +976,110 @@ class ClickHouseStorage:
             client.close()
 
     # =========================================================
+    # GET PRICE HISTORY FOR ONE PRODUCT
+    #
+    # Returns complete normalized price history for a
+    # specific product.
+    # =========================================================
+
+    def get_price_history(self, product_id):
+
+        client = self.get_client()
+
+        try:
+
+            result = client.query(
+                """
+                SELECT
+                    observation_id,
+                    product_id,
+                    source,
+                    source_product_id,
+                    price,
+                    original_price,
+                    discount,
+                    currency,
+                    availability,
+                    observed_at,
+                    stored_at
+
+                FROM price_observations
+
+                WHERE product_id = {product_id:String}
+
+                ORDER BY observed_at ASC
+                """,
+                parameters={
+                    "product_id": product_id
+                }
+            )
+
+            observations = []
+
+            for row in result.result_rows:
+
+                observations.append({
+
+                    "observation_id": row[0],
+
+                    "product_id": row[1],
+
+                    "source": row[2],
+
+                    "source_product_id": row[3],
+
+                    "goods_id": row[3],
+
+                    "price": (
+                        float(row[4])
+                        if row[4] is not None
+                        else None
+                    ),
+
+                    "original_price": (
+                        float(row[5])
+                        if row[5] is not None
+                        else None
+                    ),
+
+                    "discount": (
+                        float(row[6])
+                        if row[6] is not None
+                        else None
+                    ),
+
+                    "currency": row[7],
+
+                    "availability": row[8],
+
+                    "observed_at": str(row[9]),
+
+                    "stored_at": str(row[10]),
+                })
+
+            print(
+                "[ClickHouse] GET PRICE HISTORY:",
+                product_id,
+                len(observations),
+                "records"
+            )
+
+            return observations
+
+        except Exception as e:
+
+            print(
+                "[ClickHouse] GET PRICE HISTORY ERROR:",
+                repr(e)
+            )
+
+            raise
+
+        finally:
+
+            client.close()
+
+    # =========================================================
     # GET PRICE CHANGES
     #
     # Calculates consecutive price movements directly inside
@@ -1277,3 +1381,4 @@ class ClickHouseStorage:
         finally:
 
             client.close()
+

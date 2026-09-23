@@ -270,6 +270,73 @@ def search_products(keyword: str):
 
 
 # =========================================================
+# PRICE HISTORY FOR ONE PRODUCT
+#
+# Returns the complete normalized price observation
+# history for a specific product.
+#
+# Example:
+# /products/SHEIN-43668346/price-history
+# =========================================================
+
+@router.get("/products/{product_id}/price-history")
+def get_product_price_history(product_id: str):
+
+    try:
+
+        product_id = product_id.strip()
+
+        if not product_id:
+
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Product ID is required"
+                },
+            )
+
+        history = storage.get_price_history(
+            product_id
+        )
+
+        if not history:
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "Product price history not found",
+                    "product_id": product_id,
+                },
+            )
+
+        return {
+            "product_id": product_id,
+            "observation_count": len(history),
+            "observations": history,
+        }
+
+    except HTTPException:
+
+        raise
+
+    except Exception as e:
+
+        print(
+            "[API] GET /products/{product_id}/price-history ERROR:",
+            repr(e)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Unable to fetch product price history",
+                "type": type(e).__name__,
+                "message": str(e),
+            },
+        )
+
+
+# =========================================================
 # PRICE OBSERVATIONS
 #
 # Returns complete normalized price history.
@@ -686,3 +753,4 @@ def version():
         "data_model": "Normalized",
         "status": "Running",
     }
+
