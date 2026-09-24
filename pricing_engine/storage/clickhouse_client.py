@@ -122,6 +122,49 @@ class ClickHouseStorage:
             )
 
             # -------------------------------------------------
+            # CANONICAL PRODUCTS
+            # -------------------------------------------------
+
+            client.command(
+                """
+                CREATE TABLE IF NOT EXISTS canonical_products
+                (
+                    canonical_product_id String,
+                    canonical_name String,
+                    brand String,
+                    model String,
+                    gtin String,
+                    category String,
+                    created_at DateTime64(3, 'UTC'),
+                    updated_at DateTime64(3, 'UTC')
+                )
+                ENGINE = ReplacingMergeTree(updated_at)
+                ORDER BY canonical_product_id
+                """
+            )
+
+            # -------------------------------------------------
+            # SOURCE PRODUCT MATCHES
+            # -------------------------------------------------
+
+            client.command(
+                """
+                CREATE TABLE IF NOT EXISTS source_product_matches
+                (
+                    canonical_product_id String,
+                    source String,
+                    source_product_id String,
+                    match_method String,
+                    match_confidence Float64,
+                    created_at DateTime64(3, 'UTC'),
+                    updated_at DateTime64(3, 'UTC')
+                )
+                ENGINE = ReplacingMergeTree(updated_at)
+                ORDER BY (source, source_product_id)
+                """
+            )
+
+            # -------------------------------------------------
             # NORMALIZED PRICE OBSERVATIONS
             # -------------------------------------------------
 
@@ -1382,3 +1425,524 @@ class ClickHouseStorage:
 
             client.close()
 
+    # =========================================================
+    # CREATE CANONICAL PRODUCT
+    # =========================================================
+
+    def create_canonical_product(
+        self,
+        canonical_product_id,
+        canonical_name,
+        brand="",
+        model="",
+        gtin="",
+        category="consumer_electronics",
+    ):
+
+        client = self.get_client()
+
+        try:
+
+            now = datetime.now(
+                timezone.utc
+            )
+
+            client.insert(
+                "canonical_products",
+                [
+                    [
+                        str(canonical_product_id),
+                        str(canonical_name),
+                        str(brand or ""),
+                        str(model or ""),
+                        str(gtin or ""),
+                        str(category or ""),
+                        now,
+                        now,
+                    ]
+                ],
+                column_names=[
+                    "canonical_product_id",
+                    "canonical_name",
+                    "brand",
+                    "model",
+                    "gtin",
+                    "category",
+                    "created_at",
+                    "updated_at",
+                ],
+            )
+
+            print(
+                "[ClickHouse] Canonical product created | "
+                f"id={canonical_product_id}"
+            )
+
+            return True
+
+        finally:
+
+            client.close()
+
+    # =========================================================
+    # GET CANONICAL PRODUCT
+    # =========================================================
+
+    def get_canonical_product(
+        self,
+        canonical_product_id,
+    ):
+
+        client = self.get_client()
+
+        try:
+
+            canonical_product_id = str(
+                canonical_product_id
+            ).replace("'", "''")
+
+            result = client.query(
+                f"""
+                SELECT
+                    canonical_product_id,
+                    canonical_name,
+                    brand,
+                    model,
+                    gtin,
+                    category,
+                    created_at,
+                    updated_at
+                FROM canonical_products FINAL
+                WHERE canonical_product_id = '{canonical_product_id}'
+                LIMIT 1
+                """
+            )
+
+            if not result.result_rows:
+
+                return None
+
+            row = result.result_rows[0]
+
+            return {
+                "canonical_product_id": row[0],
+                "canonical_name": row[1],
+                "brand": row[2],
+                "model": row[3],
+                "gtin": row[4],
+                "category": row[5],
+                "created_at": row[6],
+                "updated_at": row[7],
+            }
+
+        finally:
+
+            client.close()
+
+    # =========================================================
+    # SAVE SOURCE PRODUCT MATCH
+    # =========================================================
+
+    def save_source_product_match(
+        self,
+        canonical_product_id,
+        source,
+        source_product_id,
+        match_method,
+        match_confidence,
+    ):
+
+        client = self.get_client()
+
+        try:
+
+            now = datetime.now(
+                timezone.utc
+            )
+
+            client.insert(
+                "source_product_matches",
+                [
+                    [
+                        str(canonical_product_id),
+                        str(source),
+                        str(source_product_id),
+                        str(match_method),
+                        float(match_confidence),
+                        now,
+                        now,
+                    ]
+                ],
+                column_names=[
+                    "canonical_product_id",
+                    "source",
+                    "source_product_id",
+                    "match_method",
+                    "match_confidence",
+                    "created_at",
+                    "updated_at",
+                ],
+            )
+
+            print(
+                "[ClickHouse] Source product match saved | "
+                f"canonical={canonical_product_id} | "
+                f"source={source} | "
+                f"source_product_id={source_product_id}"
+            )
+
+            return True
+
+        finally:
+
+            client.close()
+
+    # =========================================================
+    # GET PRODUCT MATCHES
+    # =========================================================
+
+    def get_product_matches(
+        self,
+        canonical_product_id,
+    ):
+
+        client = self.get_client()
+
+        try:
+
+            canonical_product_id = str(
+                canonical_product_id
+            ).replace("'", "''")
+
+            result = client.query(
+                f"""
+                SELECT
+                    canonical_product_id,
+                    source,
+                    source_product_id,
+                    match_method,
+                    match_confidence,
+                    created_at,
+                    updated_at
+                FROM source_product_matches FINAL
+                WHERE canonical_product_id = '{canonical_product_id}'
+                ORDER BY source
+                """
+            )
+
+            matches = []
+
+            for row in result.result_rows:
+
+                matches.append(
+                    {
+                        "canonical_product_id": row[0],
+                        "source": row[1],
+                        "source_product_id": row[2],
+                        "match_method": row[3],
+                        "match_confidence": float(row[4]),
+                        "created_at": row[5],
+                        "updated_at": row[6],
+                    }
+                )
+
+            return matches
+
+        finally:
+
+            client.close()
+    # =========================================================
+    # FIND CANONICAL PRODUCTS BY GTIN
+    # =========================================================
+
+    def find_canonical_products_by_gtin(
+        self,
+        gtin,
+    ):
+
+        client = self.get_client()
+
+        try:
+
+            gtin = str(
+                gtin or ""
+            ).strip().replace("'", "''")
+
+            if not gtin:
+                return []
+
+            result = client.query(
+                f"""
+                SELECT
+                    canonical_product_id,
+                    canonical_name,
+                    brand,
+                    model,
+                    gtin,
+                    category,
+                    created_at,
+                    updated_at
+                FROM canonical_products FINAL
+                WHERE gtin = '{gtin}'
+                ORDER BY canonical_product_id
+                """
+            )
+
+            products = []
+
+            for row in result.result_rows:
+
+                products.append(
+                    {
+                        "canonical_product_id": row[0],
+                        "canonical_name": row[1],
+                        "brand": row[2],
+                        "model": row[3],
+                        "gtin": row[4],
+                        "category": row[5],
+                        "created_at": row[6],
+                        "updated_at": row[7],
+                    }
+                )
+
+            return products
+
+        finally:
+
+            client.close()
+
+    # =========================================================
+    # FIND CANONICAL PRODUCTS BY MODEL
+    # =========================================================
+
+    def find_canonical_products_by_model(
+        self,
+        model,
+    ):
+
+        client = self.get_client()
+
+        try:
+
+            model = str(
+                model or ""
+            ).strip().replace("'", "''")
+
+            if not model:
+                return []
+
+            result = client.query(
+                f"""
+                SELECT
+                    canonical_product_id,
+                    canonical_name,
+                    brand,
+                    model,
+                    gtin,
+                    category,
+                    created_at,
+                    updated_at
+                FROM canonical_products FINAL
+                WHERE lower(replaceRegexpAll(model, '[^a-zA-Z0-9]', '')) =
+                      lower(replaceRegexpAll('{model}', '[^a-zA-Z0-9]', ''))
+                ORDER BY canonical_product_id
+                """
+            )
+
+            products = []
+
+            for row in result.result_rows:
+
+                products.append(
+                    {
+                        "canonical_product_id": row[0],
+                        "canonical_name": row[1],
+                        "brand": row[2],
+                        "model": row[3],
+                        "gtin": row[4],
+                        "category": row[5],
+                        "created_at": row[6],
+                        "updated_at": row[7],
+                    }
+                )
+
+            return products
+
+        finally:
+
+            client.close()
+
+    # =========================================================
+    # FIND CANONICAL PRODUCTS BY BRAND + MODEL
+    # =========================================================
+
+    def find_canonical_products_by_brand_model(
+        self,
+        brand,
+        model,
+    ):
+
+        client = self.get_client()
+
+        try:
+
+            brand = str(
+                brand or ""
+            ).strip().replace("'", "''")
+
+            model = str(
+                model or ""
+            ).strip().replace("'", "''")
+
+            if not brand or not model:
+                return []
+
+            result = client.query(
+                f"""
+                SELECT
+                    canonical_product_id,
+                    canonical_name,
+                    brand,
+                    model,
+                    gtin,
+                    category,
+                    created_at,
+                    updated_at
+                FROM canonical_products FINAL
+                WHERE lower(brand) = lower('{brand}')
+                  AND lower(
+                      replaceRegexpAll(
+                          model,
+                          '[^a-zA-Z0-9]',
+                          ''
+                      )
+                  ) =
+                  lower(
+                      replaceRegexpAll(
+                          '{model}',
+                          '[^a-zA-Z0-9]',
+                          ''
+                      )
+                  )
+                ORDER BY canonical_product_id
+                """
+            )
+
+            products = []
+
+            for row in result.result_rows:
+
+                products.append(
+                    {
+                        "canonical_product_id": row[0],
+                        "canonical_name": row[1],
+                        "brand": row[2],
+                        "model": row[3],
+                        "gtin": row[4],
+                        "category": row[5],
+                        "created_at": row[6],
+                        "updated_at": row[7],
+                    }
+                )
+
+            return products
+
+        finally:
+
+            client.close()
+
+    # =========================================================
+    # GET COMPETITIVE PRODUCT
+    # =========================================================
+
+    def get_competitive_product(
+        self,
+        canonical_product_id,
+    ):
+        """
+        Return the latest competitive pricing snapshot
+        for a canonical product.
+        """
+
+        canonical_product_id = str(
+            canonical_product_id or ""
+        ).strip()
+
+        if not canonical_product_id:
+            return None
+
+        client = self.get_client()
+
+        try:
+            safe_id = (
+                canonical_product_id
+                .replace("\\", "\\\\")
+                .replace("'", "''")
+            )
+
+            query = f"""
+                SELECT
+                    m.source,
+                    m.source_product_id,
+                    o.price,
+                    o.currency,
+                    o.availability,
+                    o.latest_observed_at
+                FROM source_product_matches AS m FINAL
+                INNER JOIN
+                (
+                    SELECT
+                        source,
+                        source_product_id,
+                        argMax(price, observed_at) AS price,
+                        argMax(currency, observed_at) AS currency,
+                        argMax(availability, observed_at) AS availability,
+                        max(observed_at) AS latest_observed_at
+                    FROM price_observations
+                    GROUP BY
+                        source,
+                        source_product_id
+                ) AS o
+                    ON m.source = o.source
+                    AND m.source_product_id = o.source_product_id
+                WHERE
+                    m.canonical_product_id = '{safe_id}'
+                ORDER BY
+                    m.source
+            """
+
+            result = client.query(query)
+
+            if not result.result_rows:
+                return None
+
+            products = []
+
+            for row in result.result_rows:
+                (
+                    source,
+                    source_product_id,
+                    price,
+                    currency,
+                    availability,
+                    latest_observed_at,
+                ) = row
+
+                products.append(
+                    {
+                        "source": source,
+                        "source_product_id": source_product_id,
+                        "price": price,
+                        "currency": currency,
+                        "availability": availability,
+                        "observed_at": latest_observed_at,
+                    }
+                )
+
+            return {
+                "canonical_product_id": canonical_product_id,
+                "products": products,
+            }
+
+        finally:
+            client.close()

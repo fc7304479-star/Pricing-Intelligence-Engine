@@ -754,3 +754,51 @@ def version():
         "status": "Running",
     }
 
+
+# =========================================================
+# COMPETITIVE PRODUCT
+# =========================================================
+
+@router.get("/competitive-products/{canonical_product_id}")
+def get_competitive_product(canonical_product_id: str):
+
+    try:
+
+        result = storage.get_competitive_product(
+            canonical_product_id
+        )
+
+        if result is None:
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "Competitive product not found",
+                    "canonical_product_id": (
+                        canonical_product_id
+                    ),
+                },
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+
+        print(
+            "[API] GET /competitive-products ERROR:",
+            repr(e)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": (
+                    "Unable to fetch competitive product"
+                ),
+                "type": type(e).__name__,
+                "message": str(e),
+            },
+        )
