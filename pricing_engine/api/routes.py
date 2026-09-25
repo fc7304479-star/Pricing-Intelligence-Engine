@@ -2,6 +2,10 @@ from fastapi import APIRouter, HTTPException
 
 from pricing_engine.storage.clickhouse_client import ClickHouseStorage
 from pricing_engine.api.schemas import Product
+from pricing_engine.intelligence.competitive_price_changes import CompetitivePriceChangeService
+from pricing_engine.intelligence.price_trend import PriceTrendService
+from pricing_engine.intelligence.pricing_signals import PricingSignalService
+from pricing_engine.intelligence.price_comparison import PriceComparisonService
 
 
 router = APIRouter()
@@ -742,6 +746,143 @@ def normalized_counts():
 # VERSION
 # =========================================================
 
+
+@router.get("/competitive-products/{canonical_product_id}/signals")
+def get_competitive_product_pricing_signals(
+    canonical_product_id: str,
+):
+    """
+    Return rule-based pricing signals for a matched
+    competitive product.
+    """
+
+    matches = storage.get_product_matches(
+        canonical_product_id
+    )
+
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "Competitive product not found",
+                "canonical_product_id": canonical_product_id,
+            },
+        )
+
+    products = []
+
+    for match in matches:
+        source = str(
+            match.get("source") or ""
+        ).strip().upper()
+
+        source_product_id = str(
+            match.get("source_product_id") or ""
+        ).strip()
+
+        if not source or not source_product_id:
+            continue
+
+        history = storage.get_price_history(
+            f"{source}-{source_product_id}"
+        )
+
+        products.append(
+            {
+                "source": source,
+                "source_product_id": source_product_id,
+                "match_method": match.get(
+                    "match_method"
+                ),
+                "match_confidence": match.get(
+                    "match_confidence"
+                ),
+                "history": history,
+            }
+        )
+
+    latest_products = []
+
+    for product in products:
+        history = product.get("history") or []
+
+        if not history:
+            continue
+
+        latest = history[-1]
+
+        latest_products.append(
+            {
+                "source": product.get("source", ""),
+                "source_product_id": product.get(
+                    "source_product_id", ""
+                ),
+                "price": latest.get("price"),
+                "currency": latest.get(
+                    "currency",
+                    "USD",
+                ),
+                "availability": latest.get(
+                    "availability",
+                    "unknown",
+                ),
+            }
+        )
+
+    comparison_service = PriceComparisonService(
+        reference_source="AMAZON"
+    )
+
+    comparison = (
+        comparison_service.compare_products(
+            latest_products
+        )
+    )
+
+    reference_product = comparison.get(
+        "reference_product"
+    )
+
+    if reference_product is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "Reference product not found",
+                "canonical_product_id": (
+                    canonical_product_id
+                ),
+                "reference_source": "AMAZON",
+            },
+        )
+
+    change_service = (
+        CompetitivePriceChangeService()
+    )
+
+    price_changes = (
+        change_service.calculate_competitive_changes(
+            products
+        )
+    )
+
+    signal_service = PricingSignalService()
+
+    result = signal_service.analyze(
+        reference_price=reference_product.get(
+            "price"
+        ),
+        market_average=comparison.get(
+            "market_average"
+        ),
+        price_changes=price_changes,
+    )
+
+    result["canonical_product_id"] = (
+        canonical_product_id
+    )
+
+    return result
+
 @router.get("/version")
 def version():
 
@@ -756,7 +897,7 @@ def version():
 
 
 # =========================================================
-# COMPETITIVE PRODUCT
+# COMPETITIVE PRODUCT SNAPSHOT
 # =========================================================
 
 @router.get("/competitive-products/{canonical_product_id}")
@@ -780,23 +921,899 @@ def get_competitive_product(canonical_product_id: str):
                 },
             )
 
-        return result
+        products = result.get(
+            "products",
+            [],
+        )
+
+        if not products:
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "No competitive pricing data found"
+                    ),
+                    "canonical_product_id": (
+                        canonical_product_id
+                    ),
+                },
+            )
+
+        # -------------------------------------------------
+        # MARKET AVERAGE
+        # -------------------------------------------------
+
+        valid_prices = []
+
+        for product in products:
+
+            price = product.get("price")
+
+            if price is None:
+                continue
+
+            try:
+                price = float(price)
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+            if price < 0:
+                continue
+
+            valid_prices.append(price)
+
+        market_average = None
+
+        if valid_prices:
+
+            market_average = round(
+                sum(valid_prices)
+                / len(valid_prices),
+                2,
+            )
+
+        # -------------------------------------------------
+        # REFERENCE SOURCE
+        # -------------------------------------------------
+
+        reference_source = "AMAZON"
+
+        reference_product = None
+
+        for product in products:
+
+            source = str(
+                product.get("source")
+                or ""
+            ).strip().upper()
+
+            if source == reference_source:
+
+                reference_product = product
+
+                break
+
+        # -------------------------------------------------
+        # REFERENCE PRICE
+        # -------------------------------------------------
+
+        reference_price = None
+
+        if reference_product is not None:
+
+            reference_price = (
+                reference_product.get("price")
+            )
+
+            if reference_price is not None:
+
+                try:
+                    reference_price = float(
+                        reference_price
+                    )
+
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+                    reference_price = None
+
+        # -------------------------------------------------
+        # PRICE DIFFERENCE %
+        # -------------------------------------------------
+
+        comparison_products = []
+
+        for product in products:
+
+            item = dict(product)
+
+            price = item.get("price")
+
+            difference_percent = None
+
+            if (
+                price is not None
+                and market_average is not None
+                and market_average != 0
+            ):
+
+                try:
+
+                    price = float(price)
+
+                    difference_percent = round(
+                        (
+                            (
+                                price
+                                - market_average
+                            )
+                            / market_average
+                        )
+                        * 100,
+                        2,
+                    )
+
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+
+                    difference_percent = None
+
+            item[
+                "price_difference_percent"
+            ] = difference_percent
+
+            comparison_products.append(
+                item
+            )
+
+        # -------------------------------------------------
+        # LAST UPDATED
+        # -------------------------------------------------
+
+        observed_times = []
+
+        for product in comparison_products:
+
+            observed_at = product.get(
+                "observed_at"
+            )
+
+            if observed_at:
+
+                observed_times.append(
+                    str(observed_at)
+                )
+
+        last_updated = None
+
+        if observed_times:
+
+            last_updated = max(
+                observed_times
+            )
+
+        # -------------------------------------------------
+        # REFERENCE VS MARKET
+        # -------------------------------------------------
+
+        reference_difference_percent = None
+
+        if (
+            reference_price is not None
+            and market_average is not None
+            and market_average != 0
+        ):
+
+            reference_difference_percent = round(
+                (
+                    (
+                        reference_price
+                        - market_average
+                    )
+                    / market_average
+                )
+                * 100,
+                2,
+            )
+
+        return {
+            "canonical_product_id": (
+                canonical_product_id
+            ),
+            "reference_source": (
+                reference_source
+            ),
+            "reference_price": (
+                reference_price
+            ),
+            "market_average": (
+                market_average
+            ),
+            "reference_difference_percent": (
+                reference_difference_percent
+            ),
+            "last_updated": (
+                last_updated
+            ),
+            "products": (
+                comparison_products
+            ),
+        }
 
     except HTTPException:
+
         raise
 
     except Exception as e:
 
         print(
             "[API] GET /competitive-products ERROR:",
-            repr(e)
+            repr(e),
         )
 
         raise HTTPException(
             status_code=500,
             detail={
                 "error": (
-                    "Unable to fetch competitive product"
+                    "Unable to fetch competitive "
+                    "product snapshot"
+                ),
+                "type": type(e).__name__,
+                "message": str(e),
+            },
+        )
+
+
+# =========================================================
+# COMPETITIVE PRODUCT PRICE HISTORY
+# =========================================================
+
+@router.get(
+    "/competitive-products/{canonical_product_id}/price-history"
+)
+def get_competitive_product_price_history(
+    canonical_product_id: str,
+):
+
+    try:
+
+        canonical_product_id = str(
+            canonical_product_id or ""
+        ).strip()
+
+        if not canonical_product_id:
+
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "canonical_product_id is required"
+                    ),
+                },
+            )
+
+        matches = storage.get_product_matches(
+            canonical_product_id
+        )
+
+        if not matches:
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "No source products are linked "
+                        "to this canonical product"
+                    ),
+                    "canonical_product_id": (
+                        canonical_product_id
+                    ),
+                },
+            )
+
+        products = []
+
+        for match in matches:
+
+            source = str(
+                match.get("source")
+                or ""
+            ).strip().upper()
+
+            source_product_id = str(
+                match.get("source_product_id")
+                or ""
+            ).strip()
+
+            if not source_product_id:
+                continue
+
+            history = storage.get_price_history(
+                f"{source}-{source_product_id}"
+            )
+
+            # -------------------------------------------------
+            # IMPORTANT:
+            # get_price_history() is source-product based.
+            # We filter the result to the exact source product.
+            # -------------------------------------------------
+
+            filtered_history = []
+
+            for observation in history:
+
+                observation_source_product_id = str(
+                    observation.get(
+                        "source_product_id"
+                    )
+                    or ""
+                ).strip()
+
+                if (
+                    observation_source_product_id
+                    and observation_source_product_id
+                    != source_product_id
+                ):
+                    continue
+
+                filtered_history.append(
+                    {
+                        "price": observation.get(
+                            "price"
+                        ),
+                        "original_price": observation.get(
+                            "original_price"
+                        ),
+                        "discount": observation.get(
+                            "discount"
+                        ),
+                        "currency": observation.get(
+                            "currency",
+                            "USD",
+                        ),
+                        "availability": observation.get(
+                            "availability",
+                            "unknown",
+                        ),
+                        "observed_at": observation.get(
+                            "observed_at"
+                        ),
+                    }
+                )
+
+            products.append(
+                {
+                    "source": source,
+                    "source_product_id": (
+                        source_product_id
+                    ),
+                    "match_method": match.get(
+                        "match_method"
+                    ),
+                    "match_confidence": match.get(
+                        "match_confidence"
+                    ),
+                    "history": filtered_history,
+                }
+            )
+
+        if not products:
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "No competitive price history found"
+                    ),
+                    "canonical_product_id": (
+                        canonical_product_id
+                    ),
+                },
+            )
+
+        # -------------------------------------------------
+        # SORT SOURCES
+        # -------------------------------------------------
+
+        source_order = {
+            "AMAZON": 1,
+            "WALMART": 2,
+            "BESTBUY": 3,
+        }
+
+        products.sort(
+            key=lambda item: (
+                source_order.get(
+                    item["source"],
+                    99,
+                ),
+                item["source"],
+            )
+        )
+
+        # -------------------------------------------------
+        # GLOBAL LATEST OBSERVATION
+        # -------------------------------------------------
+
+        latest_times = []
+
+        for product in products:
+
+            for observation in product["history"]:
+
+                observed_at = observation.get(
+                    "observed_at"
+                )
+
+                if observed_at:
+
+                    latest_times.append(
+                        str(observed_at)
+                    )
+
+        last_updated = None
+
+        if latest_times:
+
+            last_updated = max(
+                latest_times
+            )
+
+        return {
+            "canonical_product_id": (
+                canonical_product_id
+            ),
+            "reference_source": "AMAZON",
+            "last_updated": last_updated,
+            "products": products,
+        }
+
+    except HTTPException:
+
+        raise
+
+    except Exception as e:
+
+        print(
+            "[API] GET "
+            "/competitive-products/"
+            "{canonical_product_id}/price-history "
+            "ERROR:",
+            repr(e),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": (
+                    "Unable to fetch competitive "
+                    "price history"
+                ),
+                "type": type(e).__name__,
+                "message": str(e),
+            },
+        )
+
+
+
+# =========================================================
+# COMPETITIVE PRODUCT PRICE CHANGES
+# =========================================================
+
+@router.get(
+    "/competitive-products/{canonical_product_id}/price-changes"
+)
+def get_competitive_product_price_changes(
+    canonical_product_id: str,
+):
+
+    try:
+
+        canonical_product_id = str(
+            canonical_product_id or ""
+        ).strip()
+
+        if not canonical_product_id:
+
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "canonical_product_id is required"
+                    ),
+                },
+            )
+
+        matches = storage.get_product_matches(
+            canonical_product_id
+        )
+
+        if not matches:
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "No source products are linked "
+                        "to this canonical product"
+                    ),
+                    "canonical_product_id": (
+                        canonical_product_id
+                    ),
+                },
+            )
+
+        products = []
+
+        for match in matches:
+
+            source = str(
+                match.get("source")
+                or ""
+            ).strip().upper()
+
+            source_product_id = str(
+                match.get("source_product_id")
+                or ""
+            ).strip()
+
+            if not source_product_id:
+                continue
+
+            history = storage.get_price_history(
+                f"{source}-{source_product_id}"
+            )
+
+            filtered_history = []
+
+            for observation in history:
+
+                observation_source_product_id = str(
+                    observation.get(
+                        "source_product_id"
+                    )
+                    or ""
+                ).strip()
+
+                if (
+                    observation_source_product_id
+                    and observation_source_product_id
+                    != source_product_id
+                ):
+                    continue
+
+                filtered_history.append(
+                    {
+                        "price": observation.get(
+                            "price"
+                        ),
+                        "observed_at": observation.get(
+                            "observed_at"
+                        ),
+                    }
+                )
+
+            products.append(
+                {
+                    "source": source,
+                    "source_product_id": (
+                        source_product_id
+                    ),
+                    "match_method": match.get(
+                        "match_method"
+                    ),
+                    "match_confidence": match.get(
+                        "match_confidence"
+                    ),
+                    "history": filtered_history,
+                }
+            )
+
+        if not products:
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "No competitive price history found"
+                    ),
+                    "canonical_product_id": (
+                        canonical_product_id
+                    ),
+                },
+            )
+
+        service = CompetitivePriceChangeService()
+
+        changes = service.calculate_competitive_changes(
+            products
+        )
+
+        source_order = {
+            "AMAZON": 1,
+            "WALMART": 2,
+            "BESTBUY": 3,
+        }
+
+        changes.sort(
+            key=lambda item: (
+                source_order.get(
+                    item.get("source"),
+                    99,
+                ),
+                item.get("source", ""),
+            )
+        )
+
+        latest_times = []
+
+        for item in changes:
+
+            current = item.get("current") or {}
+
+            observed_at = current.get(
+                "observed_at"
+            )
+
+            if observed_at:
+                latest_times.append(
+                    str(observed_at)
+                )
+
+        last_updated = None
+
+        if latest_times:
+            last_updated = max(latest_times)
+
+        return {
+            "canonical_product_id": (
+                canonical_product_id
+            ),
+            "reference_source": "AMAZON",
+            "last_updated": last_updated,
+            "products": changes,
+        }
+
+    except HTTPException:
+
+        raise
+
+    except Exception as e:
+
+        print(
+            "[API] GET "
+            "/competitive-products/"
+            "{canonical_product_id}/price-changes "
+            "ERROR:",
+            repr(e),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": (
+                    "Unable to calculate competitive "
+                    "price changes"
+                ),
+                "type": type(e).__name__,
+                "message": str(e),
+            },
+        )
+
+
+# =========================================================
+# COMPETITIVE PRODUCT PRICE TRENDS
+# =========================================================
+
+@router.get(
+    "/competitive-products/{canonical_product_id}/price-trends"
+)
+def get_competitive_product_price_trends(
+    canonical_product_id: str,
+):
+
+    try:
+
+        canonical_product_id = str(
+            canonical_product_id or ""
+        ).strip()
+
+        if not canonical_product_id:
+
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "canonical_product_id is required"
+                    ),
+                },
+            )
+
+        matches = storage.get_product_matches(
+            canonical_product_id
+        )
+
+        if not matches:
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "No source products are linked "
+                        "to this canonical product"
+                    ),
+                    "canonical_product_id": (
+                        canonical_product_id
+                    ),
+                },
+            )
+
+        products = []
+
+        for match in matches:
+
+            source = str(
+                match.get("source")
+                or ""
+            ).strip().upper()
+
+            source_product_id = str(
+                match.get("source_product_id")
+                or ""
+            ).strip()
+
+            if not source_product_id:
+                continue
+
+            history = storage.get_price_history(
+                f"{source}-{source_product_id}"
+            )
+
+            filtered_history = []
+
+            for observation in history:
+
+                observation_source_product_id = str(
+                    observation.get(
+                        "source_product_id"
+                    )
+                    or ""
+                ).strip()
+
+                if (
+                    observation_source_product_id
+                    and observation_source_product_id
+                    != source_product_id
+                ):
+                    continue
+
+                filtered_history.append(
+                    {
+                        "price": observation.get(
+                            "price"
+                        ),
+                        "observed_at": observation.get(
+                            "observed_at"
+                        ),
+                    }
+                )
+
+            products.append(
+                {
+                    "source": source,
+                    "source_product_id": (
+                        source_product_id
+                    ),
+                    "match_method": match.get(
+                        "match_method"
+                    ),
+                    "match_confidence": match.get(
+                        "match_confidence"
+                    ),
+                    "history": filtered_history,
+                }
+            )
+
+        if not products:
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "No competitive price history found"
+                    ),
+                    "canonical_product_id": (
+                        canonical_product_id
+                    ),
+                },
+            )
+
+        service = PriceTrendService()
+
+        trends = service.calculate_competitive_trends(
+            products
+        )
+
+        source_order = {
+            "AMAZON": 1,
+            "WALMART": 2,
+            "BESTBUY": 3,
+        }
+
+        trends.sort(
+            key=lambda item: (
+                source_order.get(
+                    item.get("source"),
+                    99,
+                ),
+                item.get("source", ""),
+            )
+        )
+
+        latest_times = []
+
+        for item in trends:
+
+            history = item.get(
+                "history",
+                [],
+            )
+
+            if not history:
+                continue
+
+            latest_observed_at = history[-1].get(
+                "observed_at"
+            )
+
+            if latest_observed_at:
+                latest_times.append(
+                    str(latest_observed_at)
+                )
+
+        last_updated = None
+
+        if latest_times:
+            last_updated = max(
+                latest_times
+            )
+
+        return {
+            "canonical_product_id": (
+                canonical_product_id
+            ),
+            "reference_source": "AMAZON",
+            "last_updated": last_updated,
+            "products": trends,
+        }
+
+    except HTTPException:
+
+        raise
+
+    except Exception as e:
+
+        print(
+            "[API] GET "
+            "/competitive-products/"
+            "{canonical_product_id}/price-trends "
+            "ERROR:",
+            repr(e),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": (
+                    "Unable to calculate competitive "
+                    "price trends"
                 ),
                 "type": type(e).__name__,
                 "message": str(e),
