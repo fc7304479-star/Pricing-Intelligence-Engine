@@ -9,7 +9,6 @@ class CompetitivePersistenceService:
     existing ClickHouse storage architecture.
 
     Flow:
-
         source products
             ↓
         product_catalog
@@ -19,6 +18,13 @@ class CompetitivePersistenceService:
         canonical_products
             ↓
         source_product_matches
+
+    Canonical products are persisted idempotently:
+        - existing canonical product -> reuse
+        - missing canonical product -> create
+
+    Repeated ingestion creates new historical observations
+    without creating duplicate canonical identities.
     """
 
     def __init__(self, storage):
@@ -27,26 +33,13 @@ class CompetitivePersistenceService:
             storage
         )
 
-    # =========================================================
-    # STORE SOURCE PRODUCT
-    # =========================================================
-
-    def store_source_product(
-        self,
-        product,
-    ):
-        """
-        Store a connector product using the existing
-        normalized storage pipeline.
-        """
-
+    def store_source_product(self, product):
         source = str(
             product.get("source") or ""
         ).strip().upper()
 
         source_product_id = str(
-            product.get("source_product_id")
-            or ""
+            product.get("source_product_id") or ""
         ).strip()
 
         if not source:
@@ -61,33 +54,17 @@ class CompetitivePersistenceService:
 
         data = dict(product)
 
-        # Existing store_normalized() expects goods_id.
         data["goods_id"] = source_product_id
-
         data["source"] = source
 
         return self.storage.store_normalized(
             data
         )
 
-    # =========================================================
-    # STORE ALL SOURCE PRODUCTS
-    # =========================================================
-
-    def store_source_products(
-        self,
-        products,
-    ):
-        """
-        Store all source products.
-
-        Returns one result per product.
-        """
-
+    def store_source_products(self, products):
         results = []
 
         for product in products:
-
             stored = self.store_source_product(
                 product
             )
@@ -108,33 +85,72 @@ class CompetitivePersistenceService:
 
         return results
 
-    # =========================================================
-    # CREATE CANONICAL PRODUCT
-    # =========================================================
-
     def create_canonical(
         self,
         canonical_product_id,
         reference_product,
     ):
         """
-        Create the canonical product using the reference
-        product as the initial identity seed.
+        Reuse an existing canonical product when possible.
+
+        Only create a canonical product when the supplied
+        canonical_product_id does not already exist.
         """
 
-        return (
-            self.matching_service
-            .create_canonical_from_product(
+        existing = self.storage.get_canonical_product(
+            canonical_product_id
+        )
+
+        if existing is not None:
+            print(
+                "[ClickHouse] Canonical product reused | "
+                f"id={canonical_product_id}"
+            )
+
+            return existing
+
+        created = (
+            self.matching_service.create_canonical_from_product(
                 product=reference_product,
-                canonical_product_id=(
-                    canonical_product_id
-                ),
+                canonical_product_id=canonical_product_id,
             )
         )
 
-    # =========================================================
-    # LINK REFERENCE PRODUCT
-    # =========================================================
+        if not created:
+            return None
+
+        existing = self.storage.get_canonical_product(
+            canonical_product_id
+        )
+
+        if existing is not None:
+            return existing
+
+        return {
+            "canonical_product_id": canonical_product_id,
+            "canonical_name": (
+                reference_product.get(
+                    "product_name"
+                )
+                or "Unnamed Product"
+            ),
+            "brand": reference_product.get(
+                "brand",
+                "",
+            ),
+            "model": reference_product.get(
+                "model",
+                "",
+            ),
+            "gtin": reference_product.get(
+                "gtin",
+                "",
+            ),
+            "category": reference_product.get(
+                "category",
+                "consumer_electronics",
+            ),
+        }
 
     def link_reference_product(
         self,
@@ -144,39 +160,35 @@ class CompetitivePersistenceService:
         """
         Link the reference product to the canonical product.
 
-        The reference product is the initial canonical seed,
-        so it receives canonical_seed as its match method.
+        The existing ReplacingMergeTree storage behavior makes
+        this operation safe to repeat.
         """
 
         return self.matching_service.save_match(
-            canonical_product_id=(
-                canonical_product_id
-            ),
+            canonical_product_id=canonical_product_id,
             product=reference_product,
             match_method="canonical_seed",
             match_confidence=1.0,
         )
-
-    # =========================================================
-    # LINK COMPETITORS
-    # =========================================================
 
     def link_competitors(
         self,
         competitor_products,
     ):
         """
-        Match and link competitor products against the
-        canonical product candidates.
+        Match and link competitor source products.
+
+        Existing matches are safely replaced/updated by the
+        existing source-product match storage layer.
         """
 
         results = []
 
         for product in competitor_products:
-
             result = (
-                self.matching_service
-                .match_and_link(product)
+                self.matching_service.match_and_link(
+                    product
+                )
             )
 
             results.append(
@@ -195,10 +207,6 @@ class CompetitivePersistenceService:
 
         return results
 
-    # =========================================================
-    # COMPLETE PERSISTENCE FLOW
-    # =========================================================
-
     def persist_competitive_product(
         self,
         canonical_product_id,
@@ -206,15 +214,24 @@ class CompetitivePersistenceService:
         competitor_products,
     ):
         """
-        Complete persistence flow for one canonical product.
+        Persist one complete competitive product group.
 
-        Steps:
+        Important behavior:
 
-        1. Store reference product.
-        2. Store competitor products.
-        3. Create canonical product.
-        4. Link reference product.
-        5. Match and link competitors.
+        First ingestion:
+            source products stored
+            canonical product created
+            source matches created
+            observations stored
+
+        Repeated ingestion:
+            source products stored
+            existing canonical product reused
+            source matches updated/reused
+            new price observations stored
+
+        This keeps canonical identity stable while preserving
+        price history.
         """
 
         all_products = [
@@ -222,20 +239,26 @@ class CompetitivePersistenceService:
             *competitor_products,
         ]
 
+        # -----------------------------------------------------
+        # 1. Store source products and price observations
+        # -----------------------------------------------------
+
         storage_results = (
             self.store_source_products(
                 all_products
             )
         )
 
-        canonical_created = self.create_canonical(
-            canonical_product_id=(
-                canonical_product_id
-            ),
+        # -----------------------------------------------------
+        # 2. Create OR reuse canonical product
+        # -----------------------------------------------------
+
+        canonical_product = self.create_canonical(
+            canonical_product_id=canonical_product_id,
             reference_product=reference_product,
         )
 
-        if not canonical_created:
+        if canonical_product is None:
             return {
                 "success": False,
                 "reason": (
@@ -244,20 +267,34 @@ class CompetitivePersistenceService:
                 "storage_results": storage_results,
             }
 
+        canonical_created_or_reused = (
+            canonical_product
+        )
+
+        # -----------------------------------------------------
+        # 3. Link reference product
+        # -----------------------------------------------------
+
         reference_linked = (
             self.link_reference_product(
-                canonical_product_id=(
-                    canonical_product_id
-                ),
+                canonical_product_id=canonical_product_id,
                 reference_product=reference_product,
             )
         )
+
+        # -----------------------------------------------------
+        # 4. Match and link competitors
+        # -----------------------------------------------------
 
         competitor_results = (
             self.link_competitors(
                 competitor_products
             )
         )
+
+        # -----------------------------------------------------
+        # 5. Determine overall success
+        # -----------------------------------------------------
 
         all_competitors_matched = all(
             result.get("matched") is True
@@ -269,8 +306,11 @@ class CompetitivePersistenceService:
             "canonical_product_id": (
                 canonical_product_id
             ),
+            "canonical_product": (
+                canonical_created_or_reused
+            ),
             "storage_results": storage_results,
-            "canonical_created": canonical_created,
+            "canonical_created_or_reused": True,
             "reference_linked": reference_linked,
             "competitor_results": competitor_results,
         }
